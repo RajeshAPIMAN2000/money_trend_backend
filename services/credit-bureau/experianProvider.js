@@ -1,45 +1,81 @@
 const { fetchWithRetry } = require("./httpClient");
 const { normalize } = require("./normalizer");
 const { mockExperian, mockNoHit } = require("./mockResponses");
+const {
+  resolveExperianEnv,
+  getExperianCreditCheckUrl,
+  isExperianLiveMode,
+} = require("./experianConfig");
+const {
+  getValidExperianToken,
+  invalidateExperianToken,
+} = require("./experianAuth");
+const { buildExperianCreditCheckRequestBody } = require("./experianRequestBuilder");
 
 const name = "EXPERIAN";
 
-async function fetchCreditReport(input) {
-  const mode = process.env.CREDIT_CHECK_MODE || "sandbox";
+function buildAuthHeaders(token) {
+  return {
+    Accept: "application/json",
+    "Content-Type": "application/json",
+    Authorization: `${token.tokenType || "Bearer"} ${token.accessToken}`,
+  };
+}
 
-  if (mode === "sandbox") {
+/**
+ * Live Experian India credit-check call.
+ * Endpoint + request body come from env / configuration points — not invented here.
+ */
+async function fetchLiveExperianReport(input) {
+  const url = getExperianCreditCheckUrl();
+  const body = buildExperianCreditCheckRequestBody(input);
+  const token = await getValidExperianToken();
+  const started = Date.now();
+
+  const raw = await fetchWithRetry(
+    url,
+    {
+      method: "POST",
+      headers: buildAuthHeaders(token),
+      body: JSON.stringify(body),
+    },
+    {
+      onUnauthorized: async () => {
+        invalidateExperianToken();
+        const fresh = await getValidExperianToken();
+        return { headers: buildAuthHeaders(fresh) };
+      },
+    }
+  );
+
+  console.log(
+    `[EXPERIAN] credit-check env=${resolveExperianEnv()} durationMs=${Date.now() - started} ok=true`
+  );
+
+  return normalize(name, raw);
+}
+
+async function fetchCreditReport(input) {
+  // Sandbox mock mode (default) — no external Experian calls.
+  if (!isExperianLiveMode()) {
     const raw =
       input.simulateNoHit === true ? mockNoHit("EXPERIAN") : mockExperian(input);
     return normalize(name, raw);
   }
 
-  // TODO: insert real endpoint & payload per bureau's API doc (Experian India)
-  const baseUrl = process.env.EXPERIAN_API_BASE_URL;
-  const apiKey = process.env.EXPERIAN_API_KEY;
-  const clientSecret = process.env.EXPERIAN_CLIENT_SECRET;
-
-  if (!baseUrl || !apiKey) {
-    throw new Error("Experian API credentials not configured");
+  try {
+    return await fetchLiveExperianReport(input);
+  } catch (error) {
+    // Safe structured log — no PAN/DOB/tokens.
+    console.error(
+      `[EXPERIAN] credit-check failed code=${error.code || "UNKNOWN"} status=${error.status || "-"} message=${error.message}`
+    );
+    throw error;
   }
-
-  const payload = {
-    PAN: input.pan,
-    FirstName: input.fullName,
-    DateOfBirth: input.dob,
-    MobilePhone: input.mobile,
-  };
-
-  const raw = await fetchWithRetry(`${baseUrl}/consumerservices/credit-report`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Auth-Token": apiKey,
-      "Client-Secret": clientSecret || "",
-    },
-    body: JSON.stringify(payload),
-  });
-
-  return normalize(name, raw);
 }
 
-module.exports = { name, fetchCreditReport };
+module.exports = {
+  name,
+  fetchCreditReport,
+  fetchLiveExperianReport,
+};

@@ -10,7 +10,7 @@ const OTP_MAX_SENDS_PER_WINDOW = Number(process.env.OTP_MAX_SENDS_PER_WINDOW) ||
 const OTP_SEND_WINDOW_MINUTES = Number(process.env.OTP_SEND_WINDOW_MINUTES) || 15;
 const OTP_MAX_VERIFY_ATTEMPTS = Number(process.env.OTP_MAX_VERIFY_ATTEMPTS) || 5;
 
-const OTP_PURPOSES = ["register", "login", "forgot_password"];
+const OTP_PURPOSES = ["register", "login", "forgot_password", "credit_check"];
 
 function normalizePhone(phone) {
   return String(phone || "").replace(/\s+/g, "").trim();
@@ -39,6 +39,9 @@ function buildOtpMessage(otp, purpose) {
   }
   if (purpose === "forgot_password") {
     return `Your ${appName} password reset OTP is ${otp}. Valid for ${OTP_EXPIRY_MINUTES} minutes. Do not share it with anyone.`;
+  }
+  if (purpose === "credit_check") {
+    return `Your ${appName} credit score verification OTP is ${otp}. Valid for ${OTP_EXPIRY_MINUTES} minutes. Do not share it with anyone.`;
   }
   return `Your ${appName} login OTP is ${otp}. Valid for ${OTP_EXPIRY_MINUTES} minutes. Do not share it with anyone.`;
 }
@@ -83,7 +86,9 @@ async function sendOtp(phone, purpose) {
 
   const safePurpose = String(purpose || "").toLowerCase();
   if (!OTP_PURPOSES.includes(safePurpose)) {
-    const err = new Error("purpose must be register, login or forgot_password");
+    const err = new Error(
+      "purpose must be register, login, forgot_password or credit_check"
+    );
     err.code = "VALIDATION_ERROR";
     throw err;
   }

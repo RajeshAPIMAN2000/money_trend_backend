@@ -1,9 +1,10 @@
 const express = require("express");
 const {
-  sendRegisterOtp,
-  resendRegisterOtp,
-  sendLoginOtp,
-  resendLoginOtp,
+  // Register/Login OTP disabled for now
+  // sendRegisterOtp,
+  // resendRegisterOtp,
+  // sendLoginOtp,
+  // resendLoginOtp,
   sendForgotPasswordOtp,
   resendForgotPasswordOtp,
   resetPassword,
@@ -13,10 +14,12 @@ const {
 
 const router = express.Router();
 
-router.post("/register/send-otp", sendRegisterOtp);
-router.post("/register/resend-otp", resendRegisterOtp);
-router.post("/login/send-otp", sendLoginOtp);
-router.post("/login/resend-otp", resendLoginOtp);
+// Register / Login OTP disabled — email+password (and register fields) only
+// router.post("/register/send-otp", sendRegisterOtp);
+// router.post("/register/resend-otp", resendRegisterOtp);
+// router.post("/login/send-otp", sendLoginOtp);
+// router.post("/login/resend-otp", resendLoginOtp);
+
 router.post("/forgot-password/send-otp", sendForgotPasswordOtp);
 router.post("/forgot-password/resend-otp", resendForgotPasswordOtp);
 router.post("/forgot-password/reset", resetPassword);

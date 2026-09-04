@@ -7,6 +7,22 @@ const {
   getCommissionPercent,
   getBalance,
 } = require("../services/walletService");
+const { resolveBankLogo } = require("../services/banks/bankLogos");
+
+function withBankLogo(row) {
+  const logo = resolveBankLogo({
+    bankCode: row.bank_code,
+    logoUrl: row.logo_url,
+  });
+  return {
+    ...row,
+    logo,
+    logo_url: logo,
+    bank_logo: logo,
+    icon: logo,
+    icon_url: logo,
+  };
+}
 
 function calcFdMaturity(principal, ratePercent, tenureMonths, compounding = "quarterly") {
   const P = Number(principal);
@@ -43,7 +59,11 @@ async function getFdSummary(req, res) {
   try {
     const userId = req.user.id;
     const [fds] = await pool.query(
-      `SELECT * FROM portfolio_fds WHERE user_id = :userId AND status = 'active' ORDER BY created_at DESC`,
+      `SELECT f.*, b.logo_url
+       FROM portfolio_fds f
+       LEFT JOIN market_banks b ON b.bank_code = f.bank_code
+       WHERE f.user_id = :userId AND f.status = 'active'
+       ORDER BY f.created_at DESC`,
       { userId }
     );
 
@@ -60,7 +80,7 @@ async function getFdSummary(req, res) {
           total_fd_maturity_value: Math.round(maturity * 100) / 100,
           expected_interest: Math.round((maturity - invested) * 100) / 100,
         },
-        fds,
+        fds: fds.map(withBankLogo),
         note: "FD portfolio only — separate from RD and other apps.",
       },
     });
@@ -79,7 +99,11 @@ async function getRdSummary(req, res) {
   try {
     const userId = req.user.id;
     const [rds] = await pool.query(
-      `SELECT * FROM portfolio_rds WHERE user_id = :userId AND status = 'active' ORDER BY created_at DESC`,
+      `SELECT r.*, b.logo_url
+       FROM portfolio_rds r
+       LEFT JOIN market_banks b ON b.bank_code = r.bank_code
+       WHERE r.user_id = :userId AND r.status = 'active'
+       ORDER BY r.created_at DESC`,
       { userId }
     );
 
@@ -99,7 +123,7 @@ async function getRdSummary(req, res) {
           total_rd_maturity_value: Math.round(maturity * 100) / 100,
           expected_interest: Math.round((maturity - committed) * 100) / 100,
         },
-        rds,
+        rds: rds.map(withBankLogo),
         note: "RD portfolio only — separate from FD and other apps.",
       },
     });
@@ -117,13 +141,17 @@ async function listFds(req, res) {
   console.log("[FD] list user:", req.user?.id);
   try {
     const [rows] = await pool.query(
-      `SELECT * FROM portfolio_fds WHERE user_id = :userId ORDER BY created_at DESC`,
+      `SELECT f.*, b.logo_url
+       FROM portfolio_fds f
+       LEFT JOIN market_banks b ON b.bank_code = f.bank_code
+       WHERE f.user_id = :userId
+       ORDER BY f.created_at DESC`,
       { userId: req.user.id }
     );
     return res.json({
       success: true,
       message: "FD portfolio fetched",
-      data: { count: rows.length, fds: rows },
+      data: { count: rows.length, fds: rows.map(withBankLogo) },
     });
   } catch (error) {
     console.error("[PORTFOLIO] list FD error:", error);
@@ -270,13 +298,17 @@ async function listRds(req, res) {
   console.log("[PORTFOLIO] list RD user:", req.user?.id);
   try {
     const [rows] = await pool.query(
-      `SELECT * FROM portfolio_rds WHERE user_id = :userId ORDER BY created_at DESC`,
+      `SELECT r.*, b.logo_url
+       FROM portfolio_rds r
+       LEFT JOIN market_banks b ON b.bank_code = r.bank_code
+       WHERE r.user_id = :userId
+       ORDER BY r.created_at DESC`,
       { userId: req.user.id }
     );
     return res.json({
       success: true,
       message: "RD portfolio fetched",
-      data: { count: rows.length, rds: rows },
+      data: { count: rows.length, rds: rows.map(withBankLogo) },
     });
   } catch (error) {
     console.error("[PORTFOLIO] list RD error:", error);

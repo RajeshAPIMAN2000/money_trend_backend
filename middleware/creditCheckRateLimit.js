@@ -1,20 +1,38 @@
-const { hasRecentCheck, RATE_LIMIT_HOURS } = require("../services/creditCheckService");
+const {
+  hasRecentCheck,
+  hasRecentCheckByPhone,
+  RATE_LIMIT_HOURS,
+} = require("../services/creditCheckService");
 
 async function creditCheckRateLimit(req, res, next) {
   try {
-    const userId = Number(req.body?.userId || req.body?.user_id || req.params?.userId);
-    const bureau = String(req.body?.bureau || "").toUpperCase();
+    const userId = Number(
+      req.body?.userId || req.body?.user_id || req.params?.userId || req.user?.id
+    );
+    const bureau = String(req.body?.bureau || "CIBIL").toUpperCase();
+    const mobile = String(req.body?.mobile || req.body?.phone || "")
+      .replace(/\s+/g, "")
+      .trim();
 
-    if (!userId || !bureau) {
+    if (userId) {
+      const recent = await hasRecentCheck(userId, bureau);
+      if (recent) {
+        return res.status(429).json({
+          success: false,
+          message: `Credit check for ${bureau} already performed within the last ${RATE_LIMIT_HOURS} hours`,
+        });
+      }
       return next();
     }
 
-    const recent = await hasRecentCheck(userId, bureau);
-    if (recent) {
-      return res.status(429).json({
-        success: false,
-        message: `Credit check for ${bureau} already performed within the last ${RATE_LIMIT_HOURS} hours`,
-      });
+    if (mobile) {
+      const recent = await hasRecentCheckByPhone(mobile, bureau);
+      if (recent) {
+        return res.status(429).json({
+          success: false,
+          message: `Credit check for ${bureau} already performed within the last ${RATE_LIMIT_HOURS} hours`,
+        });
+      }
     }
 
     return next();

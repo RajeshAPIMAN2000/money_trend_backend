@@ -364,7 +364,8 @@ async function ensureCoreTables() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS credit_checks (
       id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-      user_id INT UNSIGNED NOT NULL,
+      user_id INT UNSIGNED NULL,
+      guest_phone VARCHAR(20) NULL,
       bureau ENUM('CIBIL','EXPERIAN','EQUIFAX','CRIF') NOT NULL,
       pan_number VARCHAR(255) NOT NULL,
       score INT NULL,
@@ -384,10 +385,27 @@ async function ensureCoreTables() {
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       PRIMARY KEY (id),
       KEY idx_user_bureau (user_id, bureau),
+      KEY idx_guest_phone_bureau (guest_phone, bureau),
       KEY idx_created_at (created_at),
       CONSTRAINT fk_credit_check_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
+
+  try {
+    await pool.query(`ALTER TABLE credit_checks MODIFY user_id INT UNSIGNED NULL`);
+  } catch (error) {
+    if (!String(error.message).includes("Duplicate")) {
+      console.warn("[db_init] credit_checks.user_id nullable:", error.message);
+    }
+  }
+  await addColumnIfMissing(pool, "credit_checks", "guest_phone", "guest_phone VARCHAR(20) NULL");
+  try {
+    await pool.query(`ALTER TABLE credit_checks ADD KEY idx_guest_phone_bureau (guest_phone, bureau)`);
+  } catch (error) {
+    if (!String(error.message).includes("Duplicate")) {
+      // index may already exist
+    }
+  }
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS credit_check_accounts (
@@ -454,6 +472,7 @@ async function ensureCoreTables() {
       bank_code VARCHAR(50) NOT NULL,
       bank_name VARCHAR(150) NOT NULL,
       bank_type VARCHAR(50) NULL,
+      logo_url VARCHAR(500) NULL,
       status ENUM('active','inactive') NOT NULL DEFAULT 'active',
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -462,6 +481,8 @@ async function ensureCoreTables() {
       KEY idx_market_bank_status (status)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
+
+  await addColumnIfMissing(pool, "market_banks", "logo_url", "logo_url VARCHAR(500) NULL");
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS fd_rd_rate_history (
@@ -489,7 +510,7 @@ async function ensureCoreTables() {
     CREATE TABLE IF NOT EXISTS otp_verifications (
       id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
       phone VARCHAR(20) NOT NULL,
-      purpose ENUM('register','login','forgot_password') NOT NULL,
+      purpose ENUM('register','login','forgot_password','credit_check') NOT NULL,
       otp_hash VARCHAR(64) NOT NULL,
       expires_at DATETIME NOT NULL,
       attempts TINYINT UNSIGNED NOT NULL DEFAULT 0,
@@ -503,7 +524,7 @@ async function ensureCoreTables() {
 
   try {
     await pool.query(
-      `ALTER TABLE otp_verifications MODIFY purpose ENUM('register','login','forgot_password') NOT NULL`
+      `ALTER TABLE otp_verifications MODIFY purpose ENUM('register','login','forgot_password','credit_check') NOT NULL`
     );
   } catch (error) {
     if (!String(error.message).includes("Duplicate")) {
@@ -541,6 +562,28 @@ async function ensureCoreTables() {
       PRIMARY KEY (id),
       KEY idx_banners_created_at (created_at),
       CONSTRAINT fk_banners_admin FOREIGN KEY (created_by) REFERENCES users (id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS support_tickets (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      user_id INT UNSIGNED NOT NULL,
+      subject VARCHAR(150) NOT NULL,
+      description TEXT NOT NULL,
+      attachment VARCHAR(500) NULL,
+      status ENUM('pending', 'in_process', 'fixed') NOT NULL DEFAULT 'pending',
+      admin_note TEXT NULL,
+      resolved_at DATETIME NULL,
+      updated_by INT UNSIGNED NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_support_user (user_id),
+      KEY idx_support_status (status),
+      KEY idx_support_created (created_at),
+      CONSTRAINT fk_support_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+      CONSTRAINT fk_support_admin FOREIGN KEY (updated_by) REFERENCES users (id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
 

@@ -45,7 +45,7 @@ function validateCreditCheckConsent(req, res, next) {
 }
 
 function validateBureau(req, res, next) {
-  const bureau = String(req.body?.bureau || "").toUpperCase();
+  const bureau = String(req.body?.bureau || "CIBIL").toUpperCase();
   if (!VALID_BUREAUS.includes(bureau)) {
     return res.status(400).json({
       success: false,

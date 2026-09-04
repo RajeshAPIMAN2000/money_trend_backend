@@ -17,6 +17,10 @@ const {
   maskEmail,
   maskMobile,
 } = require("../utils/security");
+const {
+  getLatestScores,
+  getLatestScoresMapForUsers,
+} = require("../services/creditCheckService");
 
 async function storeRefreshToken(userId, refreshToken) {
   const tokenHash = crypto.createHash("sha256").update(refreshToken).digest("hex");
@@ -192,7 +196,7 @@ async function listUsers(req, res) {
       params
     );
 
-    const users = rows.map((row) => ({
+    const usersBase = rows.map((row) => ({
       id: row.id,
       full_name: row.full_name,
       email: row.email,
@@ -239,6 +243,16 @@ async function listUsers(req, res) {
             }
           : null
       ),
+    }));
+
+    const scoreMap = await getLatestScoresMapForUsers(usersBase.map((u) => u.id));
+    const users = usersBase.map((u) => ({
+      ...u,
+      credit_score: scoreMap[u.id] || {
+        cibil_score: null,
+        experian_score: null,
+        primary_score: null,
+      },
     }));
 
     return res.json({
@@ -294,6 +308,8 @@ async function getUserById(req, res) {
       { userId }
     );
 
+    const creditScores = await getLatestScores(userId);
+
     return res.json({
       success: true,
       message: "User details fetched successfully",
@@ -301,6 +317,12 @@ async function getUserById(req, res) {
         user,
         kyc: mapKyc(kycRows[0] || null),
         nominee: mapNominee(nomineeRows[0] || null),
+        credit_score: {
+          primary_score: creditScores.primary_score,
+          cibil_score: creditScores.cibil_score,
+          scores_by_bureau: creditScores.scores_by_bureau,
+          latest_checks: creditScores.latest_checks,
+        },
       },
     });
   } catch (error) {

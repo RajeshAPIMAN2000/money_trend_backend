@@ -3,6 +3,7 @@ const { getTicker } = require("./fdRdRateService");
 const { listMarketBanks, tenureLabelToMonths } = require("./marketBankService");
 const { getBalance, ensureWallet } = require("./walletService");
 const { getLatestInsights } = require("./articleService");
+const { resolveBankLogo } = require("./banks/bankLogos");
 
 const TENURE_OPTIONS = [
   { value: "1_year", label: "1 Year", months: 12 },
@@ -119,7 +120,7 @@ async function getCompareInvest(options = {}) {
 
   const [rows] = await pool.query(
     `SELECT r.id AS rate_id, r.interest_rate, r.tenure_label, r.min_deposit, r.max_deposit,
-            b.id AS bank_id, b.bank_code, b.bank_name, b.bank_type
+            b.id AS bank_id, b.bank_code, b.bank_name, b.bank_type, b.logo_url
      FROM fd_rd_rates r
      INNER JOIN market_banks b ON b.bank_code = r.bank_code AND b.status = 'active'
      WHERE r.product_type = :productType
@@ -141,6 +142,7 @@ async function getCompareInvest(options = {}) {
       productType === "FD"
         ? calcFdMaturity(amount, rate, tenureMonths)
         : calcRdMaturity(amount, rate, tenureMonths);
+    const logo = resolveBankLogo({ bankCode: row.bank_code, logoUrl: row.logo_url });
 
     return {
       rank: index + 1,
@@ -150,6 +152,11 @@ async function getCompareInvest(options = {}) {
       bank_name: row.bank_name,
       bank_code: row.bank_code,
       bank_type: row.bank_type,
+      logo,
+      logo_url: logo,
+      bank_logo: logo,
+      icon: logo,
+      icon_url: logo,
       interest_rate: rate,
       rate_display: `${rate}% p.a.`,
       investment_amount: amount,

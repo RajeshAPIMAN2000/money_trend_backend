@@ -22,6 +22,7 @@ const ratesRoutes = require("./routes/rates");
 const homeRoutes = require("./routes/home");
 const articlesRoutes = require("./routes/articles");
 const bannersRoutes = require("./routes/banners");
+const supportRoutes = require("./routes/support");
 
 const app = express();
 
@@ -56,6 +57,7 @@ function mountApiRoutes(basePath = "") {
   app.use(route("/home"), homeRoutes);
   app.use(route("/articles"), articlesRoutes);
   app.use(route("/banners"), bannersRoutes);
+  app.use(route("/support"), supportRoutes);
   app.get(route("/health"), (_req, res) => {
     res.json(healthPayload());
   });
@@ -152,6 +154,7 @@ app.get(["/api", "/api/"], (_req, res) => {
       "/api/market",
       "/api/fd",
       "/api/wallet",
+      "/api/support",
     ],
     docs: "/api-docs",
   });

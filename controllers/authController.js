@@ -433,14 +433,15 @@ async function register(req, res) {
     const password = String(req.body.password || "");
     const confirmPassword = String(req.body.confirm_password || req.body.confirmPassword || "");
     const phone = normalizePhone(req.body.phone || req.body.phone_number || req.body.phoneNumber);
-    const otp = String(req.body.otp || "").trim();
+    // Register OTP disabled — otp not required
+    // const otp = String(req.body.otp || "").trim();
     const dobParsed = parseDateOfBirth(req.body);
 
-    if (!fullName || !email || !password || !confirmPassword || !phone || !otp || !dobParsed) {
+    if (!fullName || !email || !password || !confirmPassword || !phone || !dobParsed) {
       return res.status(400).json({
         success: false,
         message:
-          "Full name, email, password, confirm password, phone number, date of birth and OTP are required",
+          "Full name, email, password, confirm password, phone number and date of birth are required",
       });
     }
 
@@ -481,15 +482,16 @@ async function register(req, res) {
       });
     }
 
-    try {
-      await verifyOtp(phone, "register", otp);
-    } catch (otpError) {
-      const status =
-        otpError.code === "INVALID_OTP" || otpError.code === "OTP_EXPIRED" || otpError.code === "OTP_LOCKED"
-          ? 400
-          : 500;
-      return res.status(status).json({ success: false, message: otpError.message });
-    }
+    // Register OTP verification disabled
+    // try {
+    //   await verifyOtp(phone, "register", otp);
+    // } catch (otpError) {
+    //   const status =
+    //     otpError.code === "INVALID_OTP" || otpError.code === "OTP_EXPIRED" || otpError.code === "OTP_LOCKED"
+    //       ? 400
+    //       : 500;
+    //   return res.status(status).json({ success: false, message: otpError.message });
+    // }
 
     const passwordHash = await bcrypt.hash(password, 10);
     const [result] = await pool.query(
@@ -547,12 +549,13 @@ async function login(req, res) {
   try {
     const email = String(req.body.email || "").trim().toLowerCase();
     const password = String(req.body.password || "");
-    const otp = String(req.body.otp || "").trim();
+    // Login OTP disabled — otp not required
+    // const otp = String(req.body.otp || "").trim();
 
-    if (!email || !password || !otp) {
+    if (!email || !password) {
       return res.status(400).json({
         success: false,
-        message: "Email, password and OTP are required",
+        message: "Email and password are required",
       });
     }
 
@@ -579,15 +582,16 @@ async function login(req, res) {
       return res.status(401).json({ success: false, message: "Invalid email or password" });
     }
 
-    try {
-      await verifyOtp(user.phone, "login", otp);
-    } catch (otpError) {
-      const status =
-        otpError.code === "INVALID_OTP" || otpError.code === "OTP_EXPIRED" || otpError.code === "OTP_LOCKED"
-          ? 400
-          : 500;
-      return res.status(status).json({ success: false, message: otpError.message });
-    }
+    // Login OTP verification disabled
+    // try {
+    //   await verifyOtp(user.phone, "login", otp);
+    // } catch (otpError) {
+    //   const status =
+    //     otpError.code === "INVALID_OTP" || otpError.code === "OTP_EXPIRED" || otpError.code === "OTP_LOCKED"
+    //       ? 400
+    //       : 500;
+    //   return res.status(status).json({ success: false, message: otpError.message });
+    // }
 
     const tokens = issueTokens(user, res);
     await storeRefreshToken(user.id, tokens.refreshToken);

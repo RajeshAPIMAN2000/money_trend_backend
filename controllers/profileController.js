@@ -21,6 +21,7 @@ const {
   getAgeYears,
 } = require("../utils/validators");
 const { writeAuditLog } = require("../utils/audit");
+const { buildPortfolioDashboard } = require("../services/portfolioDashboardService");
 
 function formatNomineeForResponse(row) {
   if (!row) return null;
@@ -183,45 +184,11 @@ async function getProfile(req, res) {
 async function getUserPortfolio(req, res) {
   console.log("[PROFILE] portfolio userId:", req.user?.id);
   try {
-    const userId = req.user.id;
-
-    const [fds] = await pool.query(
-      `SELECT * FROM portfolio_fds WHERE user_id = :userId AND status = 'active' ORDER BY created_at DESC`,
-      { userId }
-    );
-    const [rds] = await pool.query(
-      `SELECT * FROM portfolio_rds WHERE user_id = :userId AND status = 'active' ORDER BY created_at DESC`,
-      { userId }
-    );
-
-    const fdInvested = fds.reduce((s, r) => s + Number(r.principal_amount || 0), 0);
-    const rdCommitted = rds.reduce(
-      (s, r) => s + Number(r.monthly_amount || 0) * Number(r.tenure_months || 0),
-      0
-    );
-    const fdMaturity = fds.reduce((s, r) => s + Number(r.maturity_amount || 0), 0);
-    const rdMaturity = rds.reduce((s, r) => s + Number(r.maturity_amount || 0), 0);
-
+    const data = await buildPortfolioDashboard(req.user.id);
     return res.json({
       success: true,
-      message: "User portfolio fetched successfully",
-      data: {
-        summary: {
-          total_fd_count: fds.length,
-          total_rd_count: rds.length,
-          total_fd_invested: Math.round(fdInvested * 100) / 100,
-          total_rd_committed: Math.round(rdCommitted * 100) / 100,
-          total_fd_maturity_value: Math.round(fdMaturity * 100) / 100,
-          total_rd_maturity_value: Math.round(rdMaturity * 100) / 100,
-          total_portfolio_value: Math.round((fdMaturity + rdMaturity) * 100) / 100,
-        },
-        fd: fds,
-        rd: rds,
-        links: {
-          fd_routes: "/api/fd",
-          rd_routes: "/api/market/rd",
-        },
-      },
+      message: "User portfolio / smart dashboard fetched successfully",
+      data,
     });
   } catch (error) {
     console.error("[PROFILE] portfolio error:", error);

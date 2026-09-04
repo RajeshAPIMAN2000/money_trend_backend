@@ -40,6 +40,8 @@ function isRateCurrentlyValid(row, today = new Date()) {
 }
 
 function mapRowToTickerItem(row) {
+  const { resolveBankLogo } = require("./banks/bankLogos");
+  const logo = resolveBankLogo({ bankCode: row.bank_code, logoUrl: row.logo_url });
   return {
     bankName: row.bank_name,
     bankCode: row.bank_code,
@@ -48,10 +50,17 @@ function mapRowToTickerItem(row) {
     tenureValue: Number(row.tenure),
     tenureUnit: row.tenure_unit,
     customerCategory: row.customer_category,
+    logo,
+    logo_url: logo,
+    bank_logo: logo,
+    icon: logo,
+    icon_url: logo,
   };
 }
 
 function mapRowToPublic(row) {
+  const { resolveBankLogo } = require("./banks/bankLogos");
+  const logo = resolveBankLogo({ bankCode: row.bank_code, logoUrl: row.logo_url });
   return {
     id: row.id,
     bankName: row.bank_name,
@@ -69,6 +78,11 @@ function mapRowToPublic(row) {
     status: row.status,
     source: row.source,
     updatedAt: row.updated_at,
+    logo,
+    logo_url: logo,
+    bank_logo: logo,
+    icon: logo,
+    icon_url: logo,
   };
 }
 

@@ -59,6 +59,16 @@ const {
   adminUpdateBanner,
   adminDeleteBanner,
 } = require("../controllers/bannerController");
+const {
+  adminListCreditChecks,
+  adminGetCreditCheck,
+  adminGetUserCreditScores,
+} = require("../controllers/creditCheckController");
+const {
+  adminListTickets,
+  adminGetTicket,
+  adminUpdateTicketStatus,
+} = require("../controllers/supportController");
 const { upload } = require("../middleware/upload");
 
 const router = express.Router();
@@ -127,5 +137,14 @@ router.get("/banners/:id", adminGetBanner);
 router.post("/banners", upload.single("image"), adminCreateBanner);
 router.put("/banners/:id", upload.single("image"), adminUpdateBanner);
 router.delete("/banners/:id", adminDeleteBanner);
+
+router.get("/credit-checks", adminListCreditChecks);
+router.get("/credit-checks/:id", adminGetCreditCheck);
+router.get("/users/:id/credit-checks", adminGetUserCreditScores);
+
+router.get("/support", adminListTickets);
+router.get("/support/:id", adminGetTicket);
+router.patch("/support/:id/status", adminUpdateTicketStatus);
+router.put("/support/:id/status", adminUpdateTicketStatus);
 
 module.exports = router;

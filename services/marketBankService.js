@@ -1,6 +1,7 @@
 const pool = require("../config/db");
 const { FALLBACK_BANK_RATES } = require("./banks/fallbackRates");
 const { formatTenureDisplay } = require("./fdRdRateProvider");
+const { resolveBankLogo, DEFAULT_BANK_LOGOS } = require("./banks/bankLogos");
 
 const PERIODS = {
   previous_month: 1,
@@ -36,28 +37,40 @@ function repoRateOn(date) {
 }
 
 function mapBankRow(row) {
+  const logo = resolveBankLogo({ bankCode: row.bank_code, logoUrl: row.logo_url });
   return {
     id: row.id,
     bankCode: row.bank_code,
+    bank_code: row.bank_code,
     bankName: row.bank_name,
+    bank_name: row.bank_name,
     bankType: row.bank_type,
+    bank_type: row.bank_type,
     status: row.status,
+    logo,
+    logo_url: logo,
+    bank_logo: logo,
+    icon: logo,
+    icon_url: logo,
   };
 }
 
 async function seedMarketBanks() {
   for (const bank of Object.values(FALLBACK_BANK_RATES)) {
+    const logoUrl = DEFAULT_BANK_LOGOS[bank.bank_code] || DEFAULT_BANK_LOGOS.sbi || "/uploads/banks/default.svg";
     await pool.query(
-      `INSERT INTO market_banks (bank_code, bank_name, bank_type, status)
-       VALUES (:bankCode, :bankName, :bankType, 'active')
+      `INSERT INTO market_banks (bank_code, bank_name, bank_type, logo_url, status)
+       VALUES (:bankCode, :bankName, :bankType, :logoUrl, 'active')
        ON DUPLICATE KEY UPDATE
          bank_name = VALUES(bank_name),
          bank_type = VALUES(bank_type),
+         logo_url = COALESCE(NULLIF(market_banks.logo_url, ''), VALUES(logo_url)),
          status = 'active'`,
       {
         bankCode: bank.bank_code,
         bankName: bank.bank,
         bankType: bank.type,
+        logoUrl,
       }
     );
   }
@@ -65,7 +78,7 @@ async function seedMarketBanks() {
 
 async function listMarketBanks() {
   const [rows] = await pool.query(
-    `SELECT id, bank_code, bank_name, bank_type, status
+    `SELECT id, bank_code, bank_name, bank_type, logo_url, status
      FROM market_banks
      WHERE status = 'active'
      ORDER BY bank_name ASC`
@@ -75,7 +88,7 @@ async function listMarketBanks() {
 
 async function getMarketBankById(id) {
   const [rows] = await pool.query(
-    `SELECT id, bank_code, bank_name, bank_type, status
+    `SELECT id, bank_code, bank_name, bank_type, logo_url, status
      FROM market_banks WHERE id = :id LIMIT 1`,
     { id }
   );
@@ -85,7 +98,7 @@ async function getMarketBankById(id) {
 
 async function getMarketBankByCode(bankCode) {
   const [rows] = await pool.query(
-    `SELECT id, bank_code, bank_name, bank_type, status
+    `SELECT id, bank_code, bank_name, bank_type, logo_url, status
      FROM market_banks WHERE bank_code = :bankCode LIMIT 1`,
     { bankCode: String(bankCode).toLowerCase() }
   );
@@ -612,6 +625,10 @@ async function getFundPerformanceComparison(options = {}) {
       bank_id: bank.id,
       bank_code: bank.bankCode,
       bank_name: bank.bankName,
+      logo: bank.logo,
+      logo_url: bank.logo_url,
+      bank_logo: bank.bank_logo,
+      icon: bank.icon,
       key: `${bank.bankCode}_rate`,
       label: `${bank.bankName} ${productType} Rate`,
       type: "line",
@@ -626,6 +643,10 @@ async function getFundPerformanceComparison(options = {}) {
       bank_id: bank.id,
       bank_code: bank.bankCode,
       bank_name: bank.bankName,
+      logo: bank.logo,
+      logo_url: bank.logo_url,
+      bank_logo: bank.bank_logo,
+      icon: bank.icon,
       key: `${bank.bankCode}_value`,
       label: `${bank.bankName} Projected Value`,
       type: "line",
@@ -641,6 +662,10 @@ async function getFundPerformanceComparison(options = {}) {
       bank_code: bank.bankCode,
       bank_name: bank.bankName,
       bank_type: bank.bankType,
+      logo: bank.logo,
+      logo_url: bank.logo_url,
+      bank_logo: bank.bank_logo,
+      icon: bank.icon,
       current_rate: currentRate,
       average_rate: average(rates),
       projected_value: currentValue,
@@ -781,11 +806,20 @@ async function recordRateHistorySnapshot() {
 
 async function enrichBanksWithIds(bankCards = []) {
   const banks = await listMarketBanks();
-  const byCode = new Map(banks.map((b) => [b.bankCode, b.id]));
-  return bankCards.map((card) => ({
-    ...card,
-    id: byCode.get(card.bank_code) || null,
-  }));
+  const byCode = new Map(banks.map((b) => [b.bankCode, b]));
+  return bankCards.map((card) => {
+    const matched = byCode.get(card.bank_code) || null;
+    const logo = matched?.logo || resolveBankLogo({ bankCode: card.bank_code });
+    return {
+      ...card,
+      id: matched?.id || null,
+      logo,
+      logo_url: logo,
+      bank_logo: logo,
+      icon: logo,
+      icon_url: logo,
+    };
+  });
 }
 
 module.exports = {

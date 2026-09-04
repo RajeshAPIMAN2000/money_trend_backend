@@ -44,7 +44,7 @@ const options = {
         },
         RegisterBody: {
           type: "object",
-          required: ["full_name", "email", "password", "confirm_password", "phone", "date_of_birth", "otp"],
+          required: ["full_name", "email", "password", "confirm_password", "phone", "date_of_birth"],
           properties: {
             full_name: { type: "string", example: "Rajesh Kumar" },
             email: { type: "string", example: "user@example.com" },
@@ -52,18 +52,19 @@ const options = {
             confirm_password: { type: "string", example: "Secret@123" },
             phone: { type: "string", example: "9876543210" },
             date_of_birth: { type: "string", example: "1995-08-15", description: "YYYY-MM-DD or DD-MM-YYYY" },
-            otp: { type: "string", example: "123456", description: "6-digit OTP received via SMS" },
+            // otp: { type: "string", example: "123456", description: "Register OTP currently disabled" },
           },
         },
         LoginBody: {
           type: "object",
-          required: ["email", "password", "otp"],
+          required: ["email", "password"],
           properties: {
             email: { type: "string", example: "user@example.com" },
             password: { type: "string", example: "Secret@123" },
-            otp: { type: "string", example: "123456", description: "6-digit OTP received via SMS" },
+            // otp: { type: "string", example: "123456", description: "Login OTP currently disabled" },
           },
         },
+        // Register/Login OTP schemas kept for when OTP is re-enabled
         SendRegisterOtpBody: {
           type: "object",
           required: ["phone"],
@@ -187,24 +188,39 @@ const options = {
             admin_note: { type: "string" },
           },
         },
+        SupportTicketStatusBody: {
+          type: "object",
+          required: ["status"],
+          properties: {
+            status: {
+              type: "string",
+              enum: ["pending", "in_process", "fixed"],
+              example: "in_process",
+              description: "Pending | In Process | Fixed",
+            },
+            admin_note: { type: "string", example: "Looking into withdrawal delay" },
+          },
+        },
         CreditCheckRunBody: {
           type: "object",
-          required: ["userId", "bureau", "consent_given", "consent_version"],
+          required: ["consent_given", "consent_version"],
           properties: {
-            userId: { type: "integer", example: 1 },
+            userId: { type: "integer", example: 1, description: "Defaults to JWT user" },
             bureau: {
               type: "string",
               enum: ["CIBIL", "EXPERIAN", "EQUIFAX", "CRIF"],
-              example: "CIBIL",
+              example: "EXPERIAN",
             },
+            consent: { type: "boolean", example: true },
             consent_given: { type: "boolean", example: true },
             consent_version: { type: "string", example: "v1.0-2026-09-01" },
           },
         },
         CreditCheckConsentBody: {
           type: "object",
-          required: ["consent_given", "consent_version"],
+          required: ["consent_version"],
           properties: {
+            consent: { type: "boolean", example: true },
             consent_given: { type: "boolean", example: true },
             consent_version: { type: "string", example: "v1.0-2026-09-01" },
           },
@@ -378,76 +394,11 @@ const options = {
           responses: { 200: { description: "Banner detail" }, 404: { description: "Not found" } },
         },
       },
-      "/auth/register/send-otp": {
-        post: {
-          tags: ["Auth"],
-          summary: "Send registration OTP via SMS",
-          description: "Step 1 of register — sends OTP to phone. Phone must not be registered.",
-          requestBody: {
-            required: true,
-            content: {
-              "application/json": { schema: { $ref: "#/components/schemas/SendRegisterOtpBody" } },
-            },
-          },
-          responses: {
-            200: { description: "OTP sent to phone" },
-            409: { description: "Phone already registered" },
-            429: { description: "Rate limited or cooldown" },
-          },
-        },
-      },
-      "/auth/register/resend-otp": {
-        post: {
-          tags: ["Auth"],
-          summary: "Resend registration OTP via SMS",
-          requestBody: {
-            required: true,
-            content: {
-              "application/json": { schema: { $ref: "#/components/schemas/SendRegisterOtpBody" } },
-            },
-          },
-          responses: {
-            200: { description: "OTP resent" },
-            429: { description: "Rate limited or cooldown" },
-          },
-        },
-      },
-      "/auth/login/send-otp": {
-        post: {
-          tags: ["Auth"],
-          summary: "Send login OTP via SMS",
-          description:
-            "Step 1 of login — validates email/password, then sends OTP to user's registered phone.",
-          requestBody: {
-            required: true,
-            content: {
-              "application/json": { schema: { $ref: "#/components/schemas/SendLoginOtpBody" } },
-            },
-          },
-          responses: {
-            200: { description: "OTP sent to registered phone (masked in response)" },
-            401: { description: "Invalid credentials" },
-            429: { description: "Rate limited or cooldown" },
-          },
-        },
-      },
-      "/auth/login/resend-otp": {
-        post: {
-          tags: ["Auth"],
-          summary: "Resend login OTP via SMS",
-          requestBody: {
-            required: true,
-            content: {
-              "application/json": { schema: { $ref: "#/components/schemas/SendLoginOtpBody" } },
-            },
-          },
-          responses: {
-            200: { description: "OTP resent" },
-            401: { description: "Invalid credentials" },
-            429: { description: "Rate limited or cooldown" },
-          },
-        },
-      },
+      // Register / Login OTP routes currently disabled
+      // "/auth/register/send-otp": { ... },
+      // "/auth/register/resend-otp": { ... },
+      // "/auth/login/send-otp": { ... },
+      // "/auth/login/resend-otp": { ... },
       "/auth/forgot-password/send-otp": {
         post: {
           tags: ["Auth"],
@@ -506,15 +457,15 @@ const options = {
       "/auth/register": {
         post: {
           tags: ["Auth"],
-          summary: "User register (after OTP verification)",
-          description: "Step 2 of register — submit details with OTP received on phone.",
+          summary: "User register (OTP disabled)",
+          description: "Register with full name, email, password, phone and DOB. OTP not required.",
           requestBody: {
             required: true,
             content: { "application/json": { schema: { $ref: "#/components/schemas/RegisterBody" } } },
           },
           responses: {
             201: { description: "Registered — next_step kyc" },
-            400: { description: "Validation or invalid OTP" },
+            400: { description: "Validation error" },
             409: { description: "Email/phone exists" },
           },
         },
@@ -522,15 +473,15 @@ const options = {
       "/auth/login": {
         post: {
           tags: ["Auth"],
-          summary: "User login (after OTP verification)",
-          description: "Step 2 of login — submit email, password and OTP received on phone.",
+          summary: "User login (OTP disabled)",
+          description: "Login with email and password. OTP not required.",
           requestBody: {
             required: true,
             content: { "application/json": { schema: { $ref: "#/components/schemas/LoginBody" } } },
           },
           responses: {
             200: { description: "Login success + tokens" },
-            400: { description: "Invalid or expired OTP" },
+            401: { description: "Invalid credentials" },
           },
         },
       },
@@ -645,9 +596,16 @@ const options = {
       "/profile/portfolio": {
         get: {
           tags: ["Profile"],
-          summary: "Get FD + RD portfolio summary",
+          summary: "Smart Dashboard — portfolio + pie/bar charts",
+          description:
+            "Returns summary cards, portfolio_mix (pie), monthly_bar_chart (stacked bars), financial_health, investments list, recent_transactions, credit_score CTA, plus raw fd/rd arrays.",
           security: [{ bearerAuth: [] }],
-          responses: { 200: { description: "Portfolio" } },
+          responses: {
+            200: {
+              description:
+                "Smart dashboard payload with summary, portfolio_mix, monthly_bar_chart, financial_health, investments, recent_transactions, credit_score, fd, rd",
+            },
+          },
         },
       },
       "/profile/bank-account": {
@@ -1736,6 +1694,80 @@ const options = {
           responses: { 200: { description: "Rate detail" } },
         },
       },
+      "/credit-check/send-otp": {
+        post: {
+          tags: ["Credit Check"],
+          summary: "Send OTP before CIBIL pull (CURRENTLY DISABLED)",
+          description: "OTP flow is commented out — not required right now.",
+          security: [{ bearerAuth: [] }],
+          responses: { 503: { description: "OTP disabled" } },
+        },
+      },
+      "/credit-check/resend-otp": {
+        post: {
+          tags: ["Credit Check"],
+          summary: "Resend credit-check OTP (CURRENTLY DISABLED)",
+          security: [{ bearerAuth: [] }],
+          responses: { 503: { description: "OTP disabled" } },
+        },
+      },
+      "/credit-check": {
+        get: {
+          tags: ["Credit Check"],
+          summary: "Credit-check history (no login — pass ?mobile=)",
+          description: "No JWT required. Use ?mobile=9876543210 or optional Bearer token.",
+          parameters: [
+            { name: "mobile", in: "query", schema: { type: "string", example: "9876543210" } },
+          ],
+          responses: { 200: { description: "History list with CIBIL/bureau scores" } },
+        },
+        post: {
+          tags: ["Credit Check"],
+          summary: "Run & save CIBIL score — login NOT required",
+          description:
+            "Public endpoint. Send applicant details + consent. Score is stored and visible to admin.",
+          requestBody: {
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["pan", "fullName", "mobile", "dateOfBirth", "consent_version"],
+                  properties: {
+                    pan: { type: "string", example: "ABCDE1234F" },
+                    fullName: { type: "string", example: "John Doe" },
+                    mobile: { type: "string", example: "9876543210" },
+                    dateOfBirth: { type: "string", example: "1995-01-15" },
+                    consent: { type: "boolean", example: true },
+                    consent_given: { type: "boolean", example: true },
+                    consent_version: { type: "string", example: "v1.0-2026-09-01" },
+                    bureau: {
+                      type: "string",
+                      enum: ["CIBIL", "EXPERIAN", "EQUIFAX", "CRIF"],
+                      example: "CIBIL",
+                    },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            201: { description: "Score fetched and saved" },
+            400: { description: "Validation / consent missing" },
+            429: { description: "Rate limited (24h per bureau)" },
+          },
+        },
+      },
+      "/credit-check/latest": {
+        get: {
+          tags: ["Credit Check"],
+          summary: "Latest CIBIL score card — login NOT required",
+          description: "Pass ?mobile=10digit or optional Bearer token.",
+          parameters: [
+            { name: "mobile", in: "query", schema: { type: "string", example: "9876543210" } },
+          ],
+          responses: { 200: { description: "primary_score, cibil_score, scores_by_bureau" } },
+        },
+      },
       "/credit-check/run": {
         post: {
           tags: ["Credit Check"],
@@ -1769,12 +1801,12 @@ const options = {
       "/credit-check/{id}": {
         get: {
           tags: ["Credit Check"],
-          summary: "Single credit check detail",
+          summary: "Single credit check detail (owner or admin only)",
           security: [{ bearerAuth: [] }],
           parameters: [
             { name: "id", in: "path", required: true, schema: { type: "integer" } },
           ],
-          responses: { 200: { description: "Check detail" } },
+          responses: { 200: { description: "Check detail" }, 403: { description: "Access denied" } },
         },
       },
       "/credit-check/run-all/{userId}": {
@@ -1793,6 +1825,125 @@ const options = {
             },
           },
           responses: { 201: { description: "Multi-bureau results" } },
+        },
+      },
+      "/admin/credit-checks": {
+        get: {
+          tags: ["Admin"],
+          summary: "List credit checks (admin)",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { name: "bureau", in: "query", schema: { type: "string", enum: ["CIBIL", "EXPERIAN", "EQUIFAX", "CRIF"] } },
+            { name: "status", in: "query", schema: { type: "string" } },
+            { name: "user_id", in: "query", schema: { type: "integer" } },
+            { name: "limit", in: "query", schema: { type: "integer" } },
+            { name: "offset", in: "query", schema: { type: "integer" } },
+          ],
+          responses: { 200: { description: "Admin credit-check list" } },
+        },
+      },
+      "/admin/credit-checks/{id}": {
+        get: {
+          tags: ["Admin"],
+          summary: "Get credit check by ID (admin)",
+          security: [{ bearerAuth: [] }],
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+          responses: { 200: { description: "Credit check detail" }, 404: { description: "Not found" } },
+        },
+      },
+      "/support/help": {
+        get: {
+          tags: ["Support"],
+          summary: "Help center meta — FAQs, subjects, stats",
+          responses: { 200: { description: "FAQs + subject dropdown options" } },
+        },
+      },
+      "/support": {
+        get: {
+          tags: ["Support"],
+          summary: "List my support tickets",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: "status",
+              in: "query",
+              schema: { type: "string", enum: ["pending", "in_process", "fixed"] },
+            },
+          ],
+          responses: { 200: { description: "User ticket list" } },
+        },
+        post: {
+          tags: ["Support"],
+          summary: "Submit support ticket (emails info@moneytrend.in)",
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              "multipart/form-data": {
+                schema: {
+                  type: "object",
+                  required: ["subject", "description"],
+                  properties: {
+                    subject: { type: "string", example: "Technical Issue" },
+                    description: { type: "string", example: "Describe your issue..." },
+                    attachment: { type: "string", format: "binary" },
+                  },
+                },
+              },
+            },
+          },
+          responses: { 201: { description: "Ticket created + emailed to support inbox" } },
+        },
+      },
+      "/support/{id}": {
+        get: {
+          tags: ["Support"],
+          summary: "Get my support ticket by ID",
+          security: [{ bearerAuth: [] }],
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+          responses: { 200: { description: "Ticket detail" }, 404: { description: "Not found" } },
+        },
+      },
+      "/admin/support": {
+        get: {
+          tags: ["Admin"],
+          summary: "List all support tickets",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: "status",
+              in: "query",
+              schema: { type: "string", enum: ["pending", "in_process", "fixed"] },
+            },
+            { name: "search", in: "query", schema: { type: "string" } },
+            { name: "limit", in: "query", schema: { type: "integer" } },
+            { name: "offset", in: "query", schema: { type: "integer" } },
+          ],
+          responses: { 200: { description: "Tickets + status summary" } },
+        },
+      },
+      "/admin/support/{id}": {
+        get: {
+          tags: ["Admin"],
+          summary: "Get support ticket by ID",
+          security: [{ bearerAuth: [] }],
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+          responses: { 200: { description: "Ticket detail" }, 404: { description: "Not found" } },
+        },
+      },
+      "/admin/support/{id}/status": {
+        patch: {
+          tags: ["Admin"],
+          summary: "Update ticket status (pending | in_process | fixed)",
+          security: [{ bearerAuth: [] }],
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": { schema: { $ref: "#/components/schemas/SupportTicketStatusBody" } },
+            },
+          },
+          responses: { 200: { description: "Status updated; user notified by email when SMTP is set" } },
         },
       },
     },
