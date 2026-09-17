@@ -1,32 +1,19 @@
-const nodemailer = require("nodemailer");
 const path = require("path");
 const fs = require("fs");
 const { resolveUploadsDir } = require("../config/uploadsPath");
+const { getEmailConfig } = require("./email/emailConfig");
+const { getEmailProvider } = require("./email/providers");
+const { buildOtpEmail } = require("./email/templates/otpEmail");
+const {
+  buildKycVerifiedEmail,
+  buildKycRejectedEmail,
+  buildKycReminderEmail,
+  buildKycSubmittedEmail,
+} = require("./email/templates/kycEmails");
+const { maskEmail, hashEmailForLog } = require("../utils/otpCrypto");
 
 function supportInbox() {
-  return String(process.env.SUPPORT_EMAIL || "info@moneytrend.in").trim();
-}
-
-function isSmtpConfigured() {
-  return Boolean(
-    process.env.SMTP_HOST &&
-      process.env.SMTP_USER &&
-      (process.env.SMTP_PASS || process.env.SMTP_PASSWORD)
-  );
-}
-
-function createTransport() {
-  if (!isSmtpConfigured()) return null;
-
-  return nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port: Number(process.env.SMTP_PORT || 587),
-    secure: String(process.env.SMTP_SECURE || "false") === "true",
-    auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS || process.env.SMTP_PASSWORD,
-    },
-  });
+  return getEmailConfig().supportEmail;
 }
 
 function absoluteAttachmentPath(relativeOrName) {
@@ -36,17 +23,94 @@ function absoluteAttachmentPath(relativeOrName) {
   return fs.existsSync(full) ? full : null;
 }
 
+function logEmailEvent({ emailType, to, result, error }) {
+  const payload = {
+    type: emailType || "generic",
+    to_masked: maskEmail(to),
+    to_hash: hashEmailForLog(to),
+    provider: result?.provider || error?.provider || getEmailConfig().provider,
+    messageId: result?.messageId || null,
+    status: error ? "failed" : result?.status || "unknown",
+    timestamp: new Date().toISOString(),
+  };
+  if (error) {
+    payload.failure_reason = error.code || error.message || "EMAIL_SEND_FAILED";
+    console.error("[EMAIL]", payload);
+  } else {
+    console.log("[EMAIL]", payload);
+  }
+}
+
 /**
- * Send support ticket notification to info@moneytrend.in (or SUPPORT_EMAIL).
- * In sandbox / missing SMTP, logs the email instead of failing the ticket create.
+ * Provider-agnostic send. Controllers must not call Resend/SMTP directly.
  */
+async function sendEmail({
+  to,
+  subject,
+  html,
+  text,
+  replyTo,
+  attachments,
+  emailType = "generic",
+}) {
+  const cfg = getEmailConfig();
+  const provider = getEmailProvider();
+
+  try {
+    const result = await provider.send({
+      from: cfg.fromHeader,
+      to,
+      subject,
+      html,
+      text,
+      replyTo: replyTo || cfg.replyTo,
+      attachments,
+      emailType,
+    });
+    logEmailEvent({ emailType, to, result });
+    return result;
+  } catch (error) {
+    const err = new Error("EMAIL_SEND_FAILED");
+    err.code = "EMAIL_SEND_FAILED";
+    err.provider = provider.name;
+    logEmailEvent({ emailType, to, error: err });
+    throw err;
+  }
+}
+
+async function sendOtpEmail({ to, firstName, otp, purpose, expiresMinutes }) {
+  const content = buildOtpEmail({ firstName, otp, purpose, expiresMinutes });
+  return sendEmail({
+    to,
+    subject: content.subject,
+    html: content.html,
+    text: content.text,
+    emailType: `otp_${String(purpose || "EMAIL_VERIFICATION").toLowerCase()}`,
+  });
+}
+
+async function sendKycVerifiedEmail({ to, firstName }) {
+  const content = buildKycVerifiedEmail({ firstName });
+  return sendEmail({ ...content, to, emailType: "kyc_verified" });
+}
+
+async function sendKycRejectedEmail({ to, firstName, reason }) {
+  const content = buildKycRejectedEmail({ firstName, reason });
+  return sendEmail({ ...content, to, emailType: "kyc_rejected" });
+}
+
+async function sendKycReminderEmail({ to, firstName }) {
+  const content = buildKycReminderEmail({ firstName });
+  return sendEmail({ ...content, to, emailType: "kyc_reminder" });
+}
+
+async function sendKycSubmittedEmail({ to, firstName }) {
+  const content = buildKycSubmittedEmail({ firstName });
+  return sendEmail({ ...content, to, emailType: "kyc_submitted" });
+}
+
 async function sendSupportTicketEmail({ ticket, user, attachmentPath }) {
   const to = supportInbox();
-  const from =
-    process.env.SMTP_FROM ||
-    process.env.SMTP_USER ||
-    `"Money Trend Support" <noreply@moneytrend.in>`;
-
   const subject = `[Support #${ticket.id}] ${ticket.subject} — ${ticket.status}`;
   const text = [
     `New support ticket #${ticket.id}`,
@@ -61,65 +125,37 @@ async function sendSupportTicketEmail({ ticket, user, attachmentPath }) {
     ticket.description,
     ``,
     attachmentPath ? `Attachment: ${attachmentPath}` : `Attachment: none`,
-    ``,
-    `Submitted at: ${ticket.created_at || new Date().toISOString()}`,
   ].join("\n");
 
   const html = `
     <h2>New support ticket #${ticket.id}</h2>
     <p><strong>Status:</strong> ${ticket.status}</p>
-    <p><strong>Subject:</strong> ${ticket.subject}</p>
-    <p><strong>User:</strong> ${user?.full_name || "N/A"} &lt;${user?.email || "N/A"}&gt;</p>
-    <p><strong>Phone:</strong> ${user?.phone || "N/A"}</p>
-    <p><strong>User ID:</strong> ${ticket.user_id}</p>
+    <p><strong>Subject:</strong> ${String(ticket.subject || "").replace(/</g, "&lt;")}</p>
+    <p><strong>User:</strong> ${String(user?.full_name || "N/A").replace(/</g, "&lt;")} &lt;${String(user?.email || "N/A").replace(/</g, "&lt;")}&gt;</p>
+    <p><strong>Phone:</strong> ${String(user?.phone || "N/A").replace(/</g, "&lt;")}</p>
     <hr/>
-    <p><strong>Description</strong></p>
     <p style="white-space:pre-wrap">${String(ticket.description || "").replace(/</g, "&lt;")}</p>
-    <p><strong>Attachment:</strong> ${attachmentPath || "none"}</p>
   `;
 
-  const mail = {
-    from,
-    to,
-    replyTo: user?.email || undefined,
-    subject,
-    text,
-    html,
-  };
-
+  const attachments = [];
   const filePath = absoluteAttachmentPath(attachmentPath);
   if (filePath) {
-    mail.attachments = [
-      {
-        filename: path.basename(filePath),
-        path: filePath,
-      },
-    ];
+    attachments.push({ filename: path.basename(filePath), path: filePath });
   }
 
-  const transport = createTransport();
-  if (!transport) {
-    console.log("[EMAIL][sandbox] Support ticket mail (SMTP not configured):", {
-      to,
-      subject: mail.subject,
-      text,
-      attachment: filePath || null,
-    });
-    return { sent: false, mode: "sandbox", to };
-  }
-
-  const info = await transport.sendMail(mail);
-  console.log("[EMAIL] Support ticket mailed:", { to, messageId: info.messageId, ticketId: ticket.id });
-  return { sent: true, mode: "smtp", to, messageId: info.messageId };
+  return sendEmail({
+    to,
+    subject,
+    html,
+    text,
+    replyTo: user?.email || undefined,
+    attachments: attachments.length ? attachments : undefined,
+    emailType: "support_ticket",
+  });
 }
 
 async function sendSupportStatusEmail({ ticket, user }) {
   if (!user?.email) return { sent: false, reason: "no_user_email" };
-
-  const from =
-    process.env.SMTP_FROM ||
-    process.env.SMTP_USER ||
-    `"Money Trend Support" <noreply@moneytrend.in>`;
 
   const statusLabel =
     ticket.status === "in_process"
@@ -128,33 +164,33 @@ async function sendSupportStatusEmail({ ticket, user }) {
         ? "Fixed"
         : "Pending";
 
-  const subject = `[Money Trend] Ticket #${ticket.id} is now ${statusLabel}`;
+  const subject = `[MoneyTrend] Ticket #${ticket.id} is now ${statusLabel}`;
   const text = [
     `Hi ${user.full_name || "there"},`,
     ``,
     `Your support ticket #${ticket.id} (${ticket.subject}) status was updated to: ${statusLabel}.`,
     ticket.admin_note ? `\nAdmin note: ${ticket.admin_note}` : "",
     ``,
-    `— Money Trend Support`,
+    `— MoneyTrend Support`,
   ].join("\n");
 
-  const transport = createTransport();
-  if (!transport) {
-    console.log("[EMAIL][sandbox] Status update mail:", { to: user.email, subject, text });
-    return { sent: false, mode: "sandbox", to: user.email };
-  }
-
-  const info = await transport.sendMail({
-    from,
+  return sendEmail({
     to: user.email,
     subject,
     text,
+    html: `<p>${text.replace(/\n/g, "<br/>")}</p>`,
+    emailType: "support_status",
   });
-  return { sent: true, mode: "smtp", to: user.email, messageId: info.messageId };
 }
 
 module.exports = {
   supportInbox,
+  sendEmail,
+  sendOtpEmail,
+  sendKycVerifiedEmail,
+  sendKycRejectedEmail,
+  sendKycReminderEmail,
+  sendKycSubmittedEmail,
   sendSupportTicketEmail,
   sendSupportStatusEmail,
 };

@@ -5,6 +5,7 @@ const {
   getBalance,
   creditWallet,
   currentFinancialYear,
+  checkInvestAffordability,
 } = require("../services/walletService");
 const { createDepositOrder, verifyPaymentSignature } = require("../services/razorpayService");
 const { encryptPii } = require("../utils/security");
@@ -32,8 +33,13 @@ async function getWallet(req, res) {
         currency: wallet.currency,
         status: wallet.status,
         recent_transactions: txs,
+        invest_flow: {
+          step_1: "GET /api/wallet/can-invest?type=fd|rd&amount=...",
+          step_2_if_balance: "POST /api/fd or POST /api/market/rd (deduct wallet)",
+          step_2_if_no_balance: "Show dummy payment gateway → pay shortfall → retry invest",
+        },
         regulatory_note:
-          "Wallet is a prepaid balance for FD/RD investments on Money Trend. Deposits via Razorpay. Withdrawals credited to your registered bank account after admin verification (RBI payment guidelines).",
+          "Wallet is a prepaid balance for FD/RD investments on Money Trend. For bank demos use Dummy Payment Gateway (POST /api/payments/dummy/*) with test card numbers. Live deposits may use Razorpay when configured. Withdrawals credit your registered bank account after admin verification.",
       },
     });
   } catch (error) {
@@ -41,6 +47,36 @@ async function getWallet(req, res) {
     return res.status(500).json({
       success: false,
       message: "Failed to fetch wallet",
+      error: error.message,
+    });
+  }
+}
+
+/** Frontend: check wallet first — if short, show payment gateway */
+async function canInvest(req, res) {
+  try {
+    const type = String(req.query.type || req.query.product || "fd").toLowerCase();
+    const amount = Number(req.query.amount || req.query.principal || 0);
+    if (!amount || amount < 1) {
+      return res.status(400).json({
+        success: false,
+        message: "Pass amount (and type=fd|rd). Example: /wallet/can-invest?type=fd&amount=10000",
+      });
+    }
+    const productType = type === "rd" ? "RD" : "FD";
+    const data = await checkInvestAffordability(req.user.id, amount, productType);
+    return res.json({
+      success: true,
+      message: data.can_pay_from_wallet
+        ? "Sufficient wallet balance — invest directly without payment gateway"
+        : "Insufficient wallet — show dummy payment gateway for shortfall",
+      data,
+    });
+  } catch (error) {
+    console.error("[WALLET] can-invest error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to check invest affordability",
       error: error.message,
     });
   }
@@ -450,6 +486,7 @@ async function getTaxReport(req, res) {
 
 module.exports = {
   getWallet,
+  canInvest,
   listTransactions,
   createDeposit,
   verifyDeposit,

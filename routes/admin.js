@@ -1,5 +1,10 @@
 const express = require("express");
-const { authenticate, requireAdmin } = require("../middleware/auth");
+const {
+  authenticate,
+  requireAdmin,
+  requireStaff,
+  requirePermission,
+} = require("../middleware/auth");
 const {
   adminLogin,
   getDashboard,
@@ -33,6 +38,21 @@ const {
   listCommissions,
 } = require("../controllers/adminController");
 const {
+  listAvailableSubAdminRoles,
+  listSubAdmins,
+  getSubAdminById,
+  createSubAdmin,
+  updateSubAdmin,
+  deleteSubAdmin,
+} = require("../controllers/subAdminController");
+const {
+  adminGetSeoSettings,
+  adminUpdateSeoSettings,
+  adminListSeoPages,
+  adminUpsertSeoPage,
+  adminDeleteSeoPage,
+} = require("../controllers/seoController");
+const {
   adminListRates,
   adminCreateRate,
   adminUpdateRate,
@@ -63,6 +83,7 @@ const {
   adminListCreditChecks,
   adminGetCreditCheck,
   adminGetUserCreditScores,
+  adminEquifaxCdsStatus,
 } = require("../controllers/creditCheckController");
 const {
   adminListTickets,
@@ -75,7 +96,43 @@ const router = express.Router();
 
 router.post("/login", adminLogin);
 
-router.use(authenticate, requireAdmin);
+// Admin + Sub-admin portal
+router.use(authenticate, requireStaff);
+
+// ----- SEO Management (admin or sub-admin with seo role) -----
+router.get("/seo/settings", requirePermission("seo"), adminGetSeoSettings);
+router.put("/seo/settings", requirePermission("seo"), adminUpdateSeoSettings);
+router.patch("/seo/settings", requirePermission("seo"), adminUpdateSeoSettings);
+router.get("/seo/pages", requirePermission("seo"), adminListSeoPages);
+router.post("/seo/pages", requirePermission("seo"), adminUpsertSeoPage);
+router.put("/seo/pages", requirePermission("seo"), adminUpsertSeoPage);
+router.put("/seo/pages/:id", requirePermission("seo"), adminUpsertSeoPage);
+router.delete("/seo/pages/:id", requirePermission("seo"), adminDeleteSeoPage);
+
+// ----- Blog Management -----
+router.get("/blogs", requirePermission("blog"), adminListBlogs);
+router.get("/blogs/:id", requirePermission("blog"), adminGetBlog);
+router.post("/blogs", requirePermission("blog"), upload.single("image"), adminCreateBlog);
+router.put("/blogs/:id", requirePermission("blog"), upload.single("image"), adminUpdateBlog);
+router.delete("/blogs/:id", requirePermission("blog"), adminDeleteBlog);
+
+// ----- News Management -----
+router.get("/news", requirePermission("news"), adminListNews);
+router.get("/news/:id", requirePermission("news"), adminGetNews);
+router.post("/news", requirePermission("news"), upload.single("image"), adminCreateNews);
+router.put("/news/:id", requirePermission("news"), upload.single("image"), adminUpdateNews);
+router.delete("/news/:id", requirePermission("news"), adminDeleteNews);
+
+// ----- Full admin only below -----
+router.use(requireAdmin);
+
+router.get("/sub-admins/roles", listAvailableSubAdminRoles);
+router.get("/sub-admins", listSubAdmins);
+router.get("/sub-admins/:id", getSubAdminById);
+router.post("/sub-admins", createSubAdmin);
+router.put("/sub-admins/:id", updateSubAdmin);
+router.patch("/sub-admins/:id", updateSubAdmin);
+router.delete("/sub-admins/:id", deleteSubAdmin);
 
 router.get("/dashboard", getDashboard);
 
@@ -120,18 +177,6 @@ router.put("/rates/:id", adminUpdateRate);
 router.patch("/rates/:id/status", adminPatchRateStatus);
 router.delete("/rates/:id", adminDeleteRate);
 
-router.get("/blogs", adminListBlogs);
-router.get("/blogs/:id", adminGetBlog);
-router.post("/blogs", upload.single("image"), adminCreateBlog);
-router.put("/blogs/:id", upload.single("image"), adminUpdateBlog);
-router.delete("/blogs/:id", adminDeleteBlog);
-
-router.get("/news", adminListNews);
-router.get("/news/:id", adminGetNews);
-router.post("/news", upload.single("image"), adminCreateNews);
-router.put("/news/:id", upload.single("image"), adminUpdateNews);
-router.delete("/news/:id", adminDeleteNews);
-
 router.get("/banners", adminListBanners);
 router.get("/banners/:id", adminGetBanner);
 router.post("/banners", upload.single("image"), adminCreateBanner);
@@ -139,6 +184,8 @@ router.put("/banners/:id", upload.single("image"), adminUpdateBanner);
 router.delete("/banners/:id", adminDeleteBanner);
 
 router.get("/credit-checks", adminListCreditChecks);
+router.get("/credit-checks/equifax/status", adminEquifaxCdsStatus);
+router.post("/credit-checks/equifax/token-test", adminEquifaxCdsStatus);
 router.get("/credit-checks/:id", adminGetCreditCheck);
 router.get("/users/:id/credit-checks", adminGetUserCreditScores);
 

@@ -6,34 +6,50 @@ const {
 } = require("../middleware/creditCheckConsent");
 const { creditCheckRateLimit } = require("../middleware/creditCheckRateLimit");
 const {
-  // OTP disabled for now — uncomment when credit-check OTP is required again
-  // sendCreditCheckOtp,
-  // resendCreditCheckOtp,
   runCheck,
   getMyLatestScore,
   getMyCheckHistory,
   getCheckHistory,
   getCheckDetail,
+  downloadCreditReport,
+  downloadLatestCreditReports,
   runAllChecks,
 } = require("../controllers/creditCheckController");
+const {
+  enroll,
+  getEnrollment,
+  requestScore,
+  latestScore,
+  scoreHistory,
+  latestReport,
+  reportSummary,
+  reportDetails,
+  monitoringList,
+  monitoringAlert,
+} = require("../controllers/equifaxController");
 
 const router = express.Router();
 
-// OTP disabled — no OTP required for CIBIL/credit check currently
-// router.post("/send-otp", authenticate, sendCreditCheckOtp);
-// router.post("/resend-otp", authenticate, resendCreditCheckOtp);
-
 /**
  * Public user CIBIL endpoints — login NOT required.
- * Optional Bearer token is accepted when present.
+ * Default CIBIL check stores CIBIL + EXPERIAN + EQUIFAX rows when CIBIL_MULTI_BUREAU=true.
  */
 router.get("/latest", optionalAuthenticate, getMyLatestScore);
+router.get("/report/latest", optionalAuthenticate, downloadLatestCreditReports);
 router.get("/", optionalAuthenticate, getMyCheckHistory);
 
-/**
- * Public: run & save CIBIL score (no login).
- * Body: pan, fullName, mobile, dateOfBirth, consent, consent_version
- */
+/** Equifax Consumer Engagement Suite — authenticated MoneyTrend user */
+router.post("/enrollment", authenticate, validateCreditCheckConsent, enroll);
+router.get("/enrollment", authenticate, getEnrollment);
+router.post("/score", authenticate, validateCreditCheckConsent, requestScore);
+router.get("/score/latest", authenticate, latestScore);
+router.get("/score/history", authenticate, scoreHistory);
+router.get("/report", authenticate, latestReport);
+router.get("/report/summary", authenticate, reportSummary);
+router.get("/report/details", authenticate, reportDetails);
+router.get("/monitoring", authenticate, monitoringList);
+router.get("/monitoring/:alertId", authenticate, monitoringAlert);
+
 router.post(
   "/",
   optionalAuthenticate,
@@ -45,7 +61,6 @@ router.post(
   }
 );
 
-/** Authenticated variants / admin */
 router.post(
   "/run",
   optionalAuthenticate,
@@ -56,6 +71,7 @@ router.post(
 );
 
 router.get("/history/:userId", authenticate, getCheckHistory);
+router.get("/:id/report", optionalAuthenticate, downloadCreditReport);
 router.get("/:id", optionalAuthenticate, getCheckDetail);
 
 router.post(

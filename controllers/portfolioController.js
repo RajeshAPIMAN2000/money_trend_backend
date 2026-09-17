@@ -6,6 +6,7 @@ const {
   settleInvestmentToWallet,
   getCommissionPercent,
   getBalance,
+  checkInvestAffordability,
 } = require("../services/walletService");
 const { resolveBankLogo } = require("../services/banks/bankLogos");
 
@@ -201,14 +202,13 @@ async function addFd(req, res) {
     const maturityAmount = calcFdMaturity(principal, interestRate, tenureMonths, compounding);
     const userId = req.user.id;
 
-    const commissionPct = getCommissionPercent();
-    const fee = Math.round(((principal * commissionPct) / 100) * 100) / 100;
-    const balance = await getBalance(userId);
-    if (balance < principal + fee) {
-      return res.status(400).json({
+    const afford = await checkInvestAffordability(userId, principal, "FD");
+    if (!afford.can_pay_from_wallet) {
+      return res.status(402).json({
         success: false,
-        message: `Insufficient wallet balance. Need ₹${principal + fee} (FD ₹${principal} + admin fee ${commissionPct}% ₹${fee})`,
-        data: { balance, required: principal + fee, admin_fee_percent: commissionPct },
+        message: `Insufficient wallet balance. Need ₹${afford.required_total} (FD ₹${principal} + admin fee ${afford.admin_fee_percent}% ₹${afford.admin_fee}). Show payment gateway.`,
+        code: "INSUFFICIENT_WALLET_BALANCE",
+        data: afford,
       });
     }
 
@@ -360,14 +360,13 @@ async function addRd(req, res) {
     const userId = req.user.id;
     // First instalment deducted from wallet at booking (recurring later can be scheduled)
     const investAmount = monthlyAmount;
-    const commissionPct = getCommissionPercent();
-    const fee = Math.round(((investAmount * commissionPct) / 100) * 100) / 100;
-    const balance = await getBalance(userId);
-    if (balance < investAmount + fee) {
-      return res.status(400).json({
+    const afford = await checkInvestAffordability(userId, investAmount, "RD");
+    if (!afford.can_pay_from_wallet) {
+      return res.status(402).json({
         success: false,
-        message: `Insufficient wallet balance. Need ₹${investAmount + fee} (RD instalment ₹${investAmount} + admin fee ${commissionPct}% ₹${fee})`,
-        data: { balance, required: investAmount + fee, admin_fee_percent: commissionPct },
+        message: `Insufficient wallet balance. Need ₹${afford.required_total} (RD ₹${investAmount} + admin fee ${afford.admin_fee_percent}% ₹${afford.admin_fee}). Show payment gateway.`,
+        code: "INSUFFICIENT_WALLET_BALANCE",
+        data: afford,
       });
     }
 

@@ -1,6 +1,7 @@
 const {
   runCreditCheck,
   runPublicCreditCheck,
+  runCibilMultiBureauCheck,
   runAllBureaus,
   getHistory,
   getHistoryByPhone,
@@ -9,6 +10,8 @@ const {
   listAdminCreditChecksWithUsers,
   getLatestScores,
   getLatestScoresByPhone,
+  buildCreditReportDownload,
+  getLatestReportBundle,
 } = require("../services/creditCheckService");
 // OTP disabled for now — uncomment when credit-check OTP is required again
 // const { sendOtp, resendOtp, verifyOtp, maskPhone } = require("../services/otpService");
@@ -210,24 +213,35 @@ async function runCheck(req, res) {
 
     // Logged-in path without form PII: use verified KYC on file
     if (!result && loggedInUserId) {
-      if (req.user.role !== "admin") {
-        // own account only
-      } else if (req.body.userId || req.body.user_id) {
-        // admin may target another user via KYC path
-      }
       const targetUserId = resolveTargetUserId(req);
       if (req.user && !assertUserAccess(req, targetUserId) && req.user.role !== "admin") {
         return res.status(403).json({ success: false, message: "Access denied for this user" });
       }
-      result = await runCreditCheck({
-        userId: targetUserId,
-        bureau,
-        requestedBy: req.user.role === "admin" ? "ADMIN" : "USER",
-        consentGiven: consent.consentGiven,
-        consentTimestamp: consent.consentTimestamp,
-        consentIp: consent.consentIp,
-        consentVersion: consent.consentVersion,
-      });
+
+      const multiEnabled =
+        String(process.env.CIBIL_MULTI_BUREAU || "true").toLowerCase() !== "false";
+
+      if (bureau === "CIBIL" && multiEnabled) {
+        result = await runCibilMultiBureauCheck({
+          userId: targetUserId,
+          requestedBy: req.user.role === "admin" ? "ADMIN" : "USER",
+          consentGiven: consent.consentGiven,
+          consentTimestamp: consent.consentTimestamp,
+          consentIp: consent.consentIp,
+          consentVersion: consent.consentVersion,
+          applicantInput: null,
+        });
+      } else {
+        result = await runCreditCheck({
+          userId: targetUserId,
+          bureau,
+          requestedBy: req.user.role === "admin" ? "ADMIN" : "USER",
+          consentGiven: consent.consentGiven,
+          consentTimestamp: consent.consentTimestamp,
+          consentIp: consent.consentIp,
+          consentVersion: consent.consentVersion,
+        });
+      }
     }
 
     if (!result) {
@@ -238,9 +252,31 @@ async function runCheck(req, res) {
       });
     }
 
+    const isSuite = result.suite === "CIBIL_MULTI_BUREAU";
+    const primaryDetail = isSuite ? result : result;
+    const reportBlock = primaryDetail.report || {
+      score: primaryDetail.score,
+      score_band: primaryDetail.score_band,
+      score_label: primaryDetail.score_label,
+      bureau: primaryDetail.bureau,
+      status: primaryDetail.status,
+      insights: primaryDetail.insights,
+      accounts: primaryDetail.accounts || [],
+      enquiries: primaryDetail.enquiries || [],
+      is_mock: primaryDetail.is_mock,
+      data_source: primaryDetail.data_source,
+      disclaimer: primaryDetail.disclaimer,
+    };
+
     return res.status(201).json({
       success: true,
-      message: `${result.score_label || "Credit score"} fetched and saved`,
+      message: isSuite
+        ? primaryDetail.is_mock
+          ? "Sandbox credit check complete (mock data — not live TransUnion CIBIL)"
+          : "CIBIL suite complete — Experian and Equifax scores stored"
+        : primaryDetail.is_mock
+          ? `${result.score_label || "Credit score"} (sandbox mock — not live bureau)`
+          : `${result.score_label || "Credit score"} fetched and saved`,
       data: {
         provider: result.bureau,
         score: result.score,
@@ -250,7 +286,22 @@ async function runCheck(req, res) {
         referenceId: result.report_ref_id,
         status: result.status,
         loginRequired: false,
+        suite: isSuite ? result.suite : undefined,
+        stored_bureaus: result.stored_bureaus || [result.bureau],
+        scores: result.scores || undefined,
+        suite_errors: result.suite_errors || undefined,
+        /** Full CIBIL-style report for UI cards */
+        insights: reportBlock.insights || result.insights || null,
+        accounts: reportBlock.accounts || result.accounts || [],
+        enquiries: reportBlock.enquiries || result.enquiries || [],
+        report: reportBlock,
+        is_mock: Boolean(reportBlock.is_mock || result.is_mock),
+        data_source: reportBlock.data_source || result.data_source || null,
+        disclaimer: reportBlock.disclaimer || result.disclaimer || null,
         check: result,
+        report_download: result.id
+          ? `/api/credit-check/${result.id}/report`
+          : "/api/credit-check/report/latest",
       },
     });
   } catch (error) {
@@ -261,6 +312,7 @@ async function runCheck(req, res) {
       message: mapped.message,
       errorCode: error.code || undefined,
       retryAfter: mapped.retryAfter,
+      details: error.details || undefined,
     });
   }
 }
@@ -411,6 +463,103 @@ async function runAllChecks(req, res) {
   }
 }
 
+async function downloadCreditReport(req, res) {
+  try {
+    const checkId = Number(req.params.id);
+    if (!checkId) {
+      return res.status(400).json({ success: false, message: "Valid check id is required" });
+    }
+
+    const requirePay =
+      String(process.env.DUMMY_PAYMENT_REQUIRE_CIBIL || "false").toLowerCase() === "true";
+    if (requirePay && req.user?.id && req.user.role !== "admin") {
+      const { hasPaidCibilReport } = require("../services/dummyPaymentService");
+      const unlocked = await hasPaidCibilReport(req.user.id);
+      if (!unlocked) {
+        return res.status(402).json({
+          success: false,
+          message: "Pay the demo CIBIL report fee to download. Use dummy card gateway.",
+          code: "CIBIL_PAYMENT_REQUIRED",
+          data: {
+            purpose: "cibil_report",
+            fee: Number(process.env.DUMMY_PAYMENT_CIBIL_FEE || 99),
+            create_payment: "POST /api/payments/dummy/create",
+            pay: "POST /api/payments/dummy/pay",
+          },
+        });
+      }
+    }
+
+    const report = await buildCreditReportDownload(checkId, {
+      requesterUserId: req.user?.id || null,
+      guestPhone: req.query.mobile || req.query.phone || null,
+      isAdmin: req.user?.role === "admin",
+    });
+
+    const asAttachment = String(req.query.download || "").toLowerCase() === "1";
+    if (asAttachment) {
+      res.setHeader("Content-Type", "application/json");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="moneytrend-credit-report-${checkId}.json"`
+      );
+    }
+
+    return res.json({
+      success: true,
+      message: "Credit report ready",
+      data: {
+        ...report,
+        payment: {
+          gateway: "dummy",
+          demo: true,
+        },
+      },
+    });
+  } catch (error) {
+    const status = error.status || (error.code === "NOT_FOUND" ? 404 : 500);
+    return res.status(status).json({
+      success: false,
+      message: error.message || "Unable to download credit report",
+      errorCode: error.code || undefined,
+    });
+  }
+}
+
+async function downloadLatestCreditReports(req, res) {
+  try {
+    if (req.user?.id) {
+      const data = await getLatestReportBundle({ userId: req.user.id });
+      return res.json({
+        success: true,
+        message: "Latest Experian + Equifax / CIBIL reports",
+        data,
+      });
+    }
+
+    const mobile = String(req.query.mobile || req.query.phone || "").replace(/\s+/g, "").trim();
+    if (!isValidPhone(mobile)) {
+      return res.status(400).json({
+        success: false,
+        message: "Pass ?mobile=10digit (no login) or send Authorization Bearer token",
+      });
+    }
+
+    const data = await getLatestReportBundle({ mobile });
+    return res.json({
+      success: true,
+      message: "Latest Experian + Equifax / CIBIL reports",
+      data,
+    });
+  } catch (error) {
+    return res.status(error.status || 500).json({
+      success: false,
+      message: error.message || "Unable to fetch credit reports",
+      errorCode: error.code || undefined,
+    });
+  }
+}
+
 async function adminListCreditChecks(req, res) {
   try {
     const data = await listAdminCreditChecksWithUsers({
@@ -463,6 +612,89 @@ async function adminGetUserCreditScores(req, res) {
   }
 }
 
+/**
+ * Admin diagnostic: Equifax CDS config + optional OAuth token fetch (never returns secrets).
+ */
+async function adminEquifaxCdsStatus(req, res) {
+  try {
+    const {
+      resolveEquifaxEnv,
+      getEquifaxBaseUrl,
+      getEquifaxOAuthTokenUrl,
+      getEquifaxCdsScopes,
+      getEquifaxCdsUrl,
+      isEquifaxLiveMode,
+    } = require("../services/credit-bureau/equifaxConfig");
+    const { getEquifaxTokenSnapshot, getEquifaxAccessToken } = require("../services/credit-bureau/equifaxAuth");
+    const { resolveCibilBackend } = require("../services/credit-bureau/cibilProvider");
+
+    const wantsToken =
+      req.method === "POST" &&
+      (req.body?.requestToken === true || req.query.requestToken === "true");
+
+    const payload = {
+      credit_check_mode: process.env.CREDIT_CHECK_MODE || "sandbox",
+      equifax_env: resolveEquifaxEnv(),
+      is_live_mode: isEquifaxLiveMode(),
+      cibil_backend: resolveCibilBackend(),
+      base_url: getEquifaxBaseUrl(),
+      oauth_token_url: getEquifaxOAuthTokenUrl(),
+      scopes: getEquifaxCdsScopes(),
+      endpoints: {
+        enrollment: getEquifaxCdsUrl("enrollment"),
+        creditScore: getEquifaxCdsUrl("creditScore"),
+        creditReport: getEquifaxCdsUrl("creditReport"),
+        creditMonitoring: getEquifaxCdsUrl("creditMonitoring"),
+      },
+      credentials_present: {
+        client_id: Boolean(String(process.env.EQUIFAX_CLIENT_ID || "").trim()),
+        client_secret: Boolean(String(process.env.EQUIFAX_CLIENT_SECRET || "").trim()),
+      },
+      token_cache: getEquifaxTokenSnapshot(),
+      how_to_go_live: [
+        "1. Confirm scopes are Approved (not Pending) on Equifax Developer Dashboard",
+        "2. Promote app Sandbox → Test → Live and copy Client ID/Secret for that environment",
+        "3. Set CREDIT_CHECK_MODE=uat (test) then live, EQUIFAX_ENV matching environment",
+        "4. Set CIBIL_PROVIDER=equifax (or leave auto when credentials + live mode)",
+        "5. Set EQUIFAX_CDS_MAPPER_MODULE to your official request mapper from Equifax API Reference",
+        "6. Whitelist production server IPs before Live calls",
+      ],
+    };
+
+    if (wantsToken) {
+      try {
+        const token = await getEquifaxAccessToken({ forceRefresh: true });
+        payload.token_test = {
+          success: true,
+          cached: token.cached,
+          expires_at: token.expiresAt,
+        };
+        payload.token_cache = getEquifaxTokenSnapshot();
+      } catch (error) {
+        payload.token_test = {
+          success: false,
+          errorCode: error.code || "EQUIFAX_OAUTH_FAILED",
+          message: error.message,
+          details: error.details || undefined,
+        };
+      }
+    }
+
+    return res.json({
+      success: true,
+      message: "Equifax Consumer Data Suite status",
+      data: payload,
+    });
+  } catch (error) {
+    console.error("[CREDIT-CHECK] equifax status error:", error.message);
+    return res.status(500).json({
+      success: false,
+      message: "Unable to read Equifax CDS status",
+      errorCode: error.code || "EQUIFAX_STATUS_FAILED",
+    });
+  }
+}
+
 module.exports = {
   sendCreditCheckOtp,
   resendCreditCheckOtp,
@@ -471,8 +703,11 @@ module.exports = {
   getMyCheckHistory,
   getCheckHistory,
   getCheckDetail,
+  downloadCreditReport,
+  downloadLatestCreditReports,
   runAllChecks,
   adminListCreditChecks,
   adminGetCreditCheck,
   adminGetUserCreditScores,
+  adminEquifaxCdsStatus,
 };

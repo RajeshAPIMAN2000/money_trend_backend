@@ -10,7 +10,7 @@ function getRefreshSecret() {
 
 function signAccessToken(payload) {
   return jwt.sign(payload, getAccessSecret(), {
-    expiresIn: process.env.JWT_ACCESS_EXPIRES || "15m",
+    expiresIn: process.env.JWT_ACCESS_EXPIRES || "10h",
   });
 }
 

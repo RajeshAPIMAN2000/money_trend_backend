@@ -48,9 +48,11 @@ async function ensureCoreTables() {
       password_hash VARCHAR(255) NOT NULL,
       phone VARCHAR(20) NOT NULL,
       profile_image VARCHAR(500) NULL,
-      role ENUM('user', 'admin') NOT NULL DEFAULT 'user',
+      role ENUM('user', 'admin', 'sub_admin') NOT NULL DEFAULT 'user',
       kyc_status ENUM('pending', 'submitted', 'verified', 'rejected') NOT NULL DEFAULT 'pending',
       kyc_method ENUM('manual', 'digilocker') NULL,
+      staff_permissions JSON NULL,
+      staff_active TINYINT(1) NOT NULL DEFAULT 1,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       PRIMARY KEY (id),
@@ -60,6 +62,22 @@ async function ensureCoreTables() {
   `);
 
   await addColumnIfMissing(pool, "users", "date_of_birth", "date_of_birth DATE NULL");
+  await addColumnIfMissing(pool, "users", "email_verified_at", "email_verified_at DATETIME NULL");
+  await addColumnIfMissing(pool, "users", "staff_permissions", "staff_permissions JSON NULL");
+  await addColumnIfMissing(
+    pool,
+    "users",
+    "staff_active",
+    "staff_active TINYINT(1) NOT NULL DEFAULT 1"
+  );
+
+  try {
+    await pool.query(
+      `ALTER TABLE users MODIFY COLUMN role ENUM('user', 'admin', 'sub_admin') NOT NULL DEFAULT 'user'`
+    );
+  } catch (err) {
+    console.warn("[DB] users.role ENUM widen skipped:", err.message);
+  }
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS kyc_documents (
@@ -358,7 +376,7 @@ async function ensureCoreTables() {
     pool,
     "users",
     "role",
-    "role ENUM('user', 'admin') NOT NULL DEFAULT 'user'"
+    "role ENUM('user', 'admin', 'sub_admin') NOT NULL DEFAULT 'user'"
   );
 
   await pool.query(`
@@ -533,6 +551,34 @@ async function ensureCoreTables() {
   }
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS email_otp_verifications (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      user_id INT UNSIGNED NULL,
+      email VARCHAR(191) NOT NULL,
+      otp_hash VARCHAR(64) NOT NULL,
+      purpose ENUM(
+        'EMAIL_VERIFICATION',
+        'PASSWORD_RESET',
+        'LOGIN_VERIFICATION',
+        'CHANGE_EMAIL',
+        'TRANSACTION_VERIFICATION'
+      ) NOT NULL,
+      attempts TINYINT UNSIGNED NOT NULL DEFAULT 0,
+      expires_at DATETIME NOT NULL,
+      verified_at DATETIME NULL,
+      ip_address VARCHAR(64) NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_email_otp_email_purpose_created (email, purpose, created_at),
+      KEY idx_email_otp_user_purpose_created (user_id, purpose, created_at),
+      KEY idx_email_otp_expires (expires_at),
+      KEY idx_email_otp_ip_created (ip_address, created_at),
+      CONSTRAINT fk_email_otp_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS articles (
       id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
       type ENUM('blog','news') NOT NULL,
@@ -586,6 +632,147 @@ async function ensureCoreTables() {
       CONSTRAINT fk_support_admin FOREIGN KEY (updated_by) REFERENCES users (id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS equifax_enrollments (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      user_id INT UNSIGNED NOT NULL,
+      equifax_enrollment_id VARCHAR(128) NOT NULL,
+      customer_reference_number VARCHAR(255) NULL,
+      status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE',
+      features_json JSON NULL,
+      last_synced_at DATETIME NULL,
+      meta_json JSON NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_equifax_enroll_user (user_id),
+      KEY idx_equifax_enroll_id (equifax_enrollment_id),
+      CONSTRAINT fk_equifax_enroll_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  await addColumnIfMissing(
+    pool,
+    "equifax_enrollments",
+    "customer_reference_number",
+    "customer_reference_number VARCHAR(255) NULL"
+  );
+  await addColumnIfMissing(
+    pool,
+    "equifax_enrollments",
+    "features_json",
+    "features_json JSON NULL"
+  );
+  await addColumnIfMissing(pool, "equifax_enrollments", "meta_json", "meta_json JSON NULL");
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS equifax_credit_scores (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      user_id INT UNSIGNED NOT NULL,
+      equifax_enrollment_id VARCHAR(128) NULL,
+      score_type VARCHAR(64) NULL,
+      feature_name VARCHAR(64) NULL,
+      score_value INT NULL,
+      score_date VARCHAR(32) NULL,
+      equifax_score_id VARCHAR(128) NULL,
+      payload_json JSON NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_eq_score_user (user_id),
+      KEY idx_eq_score_enroll (equifax_enrollment_id),
+      CONSTRAINT fk_eq_score_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS equifax_monitoring_alerts (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      user_id INT UNSIGNED NOT NULL,
+      equifax_enrollment_id VARCHAR(128) NULL,
+      alert_id VARCHAR(128) NOT NULL,
+      alert_type VARCHAR(64) NULL,
+      alert_date VARCHAR(32) NULL,
+      dedupe_key VARCHAR(191) NOT NULL,
+      payload_json JSON NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_eq_alert_dedupe (dedupe_key),
+      KEY idx_eq_alert_user (user_id),
+      CONSTRAINT fk_eq_alert_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS dummy_payments (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      user_id INT UNSIGNED NOT NULL,
+      purpose VARCHAR(40) NOT NULL,
+      amount DECIMAL(14,2) NOT NULL,
+      currency VARCHAR(10) NOT NULL DEFAULT 'INR',
+      order_id VARCHAR(80) NOT NULL,
+      payment_id VARCHAR(80) NULL,
+      auth_code VARCHAR(20) NULL,
+      status ENUM('created','paid','failed','cancelled') NOT NULL DEFAULT 'created',
+      card_brand VARCHAR(40) NULL,
+      card_last4 VARCHAR(4) NULL,
+      description VARCHAR(500) NULL,
+      meta_json JSON NULL,
+      fulfillment_json JSON NULL,
+      failure_code VARCHAR(64) NULL,
+      failure_message VARCHAR(500) NULL,
+      paid_at DATETIME NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_dummy_order (order_id),
+      KEY idx_dummy_user (user_id),
+      KEY idx_dummy_purpose_status (purpose, status),
+      CONSTRAINT fk_dummy_pay_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS seo_settings (
+      id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      site_name VARCHAR(150) NOT NULL DEFAULT 'Money Trend',
+      canonical_base_url VARCHAR(500) NULL,
+      google_analytics_code TEXT NULL,
+      robots_txt MEDIUMTEXT NULL,
+      sitemap_extra_urls JSON NULL,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS seo_pages (
+      id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      page_key VARCHAR(80) NOT NULL,
+      page_path VARCHAR(255) NOT NULL,
+      title VARCHAR(255) NOT NULL,
+      meta_description TEXT NULL,
+      meta_keywords VARCHAR(500) NULL,
+      og_title VARCHAR(255) NULL,
+      og_description TEXT NULL,
+      status ENUM('active', 'inactive') NOT NULL DEFAULT 'active',
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_seo_page_key (page_key),
+      KEY idx_seo_page_path (page_path),
+      KEY idx_seo_page_status (status)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  try {
+    const { seedDefaultSeoPages } = require("../services/seoService");
+    await seedDefaultSeoPages();
+  } catch (err) {
+    console.warn("[DB] SEO seed skipped:", err.message);
+  }
 
   await ensureDefaultAdmin(pool);
 }

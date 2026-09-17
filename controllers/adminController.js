@@ -21,6 +21,10 @@ const {
   getLatestScores,
   getLatestScoresMapForUsers,
 } = require("../services/creditCheckService");
+const {
+  parsePermissionsJson,
+  listAvailableRoles,
+} = require("../services/staffPermissionService");
 
 async function storeRefreshToken(userId, refreshToken) {
   const tokenHash = crypto.createHash("sha256").update(refreshToken).digest("hex");
@@ -31,8 +35,18 @@ async function storeRefreshToken(userId, refreshToken) {
   );
 }
 
-function issueAdminTokens(admin, res) {
-  const payload = { sub: admin.id, email: admin.email, role: "admin" };
+function issueAdminTokens(staff, res) {
+  const permissions =
+    staff.role === "admin"
+      ? listAvailableRoles().map((r) => r.key)
+      : parsePermissionsJson(staff.staff_permissions);
+
+  const payload = {
+    sub: staff.id,
+    email: staff.email,
+    role: staff.role,
+    permissions,
+  };
   const accessToken = signAccessToken(payload);
   const refreshToken = signRefreshToken(payload);
 
@@ -42,7 +56,7 @@ function issueAdminTokens(admin, res) {
     secure: process.env.NODE_ENV === "production",
   });
 
-  return { accessToken, refreshToken };
+  return { accessToken, refreshToken, permissions };
 }
 
 function mapNominee(row) {
@@ -110,43 +124,53 @@ async function adminLogin(req, res) {
     }
 
     const [rows] = await pool.query(
-      `SELECT id, full_name, email, phone, password_hash, role
+      `SELECT id, full_name, email, phone, password_hash, role, staff_permissions, staff_active
        FROM users WHERE email = :email LIMIT 1`,
       { email }
     );
 
-    if (!rows.length || rows[0].role !== "admin") {
+    if (!rows.length || !["admin", "sub_admin"].includes(rows[0].role)) {
       return res.status(401).json({ success: false, message: "Invalid admin credentials" });
     }
 
-    const admin = rows[0];
-    const matched = await bcrypt.compare(password, admin.password_hash);
+    const staff = rows[0];
+    if (staff.role === "sub_admin" && staff.staff_active != null && !Number(staff.staff_active)) {
+      return res.status(403).json({
+        success: false,
+        message: "Sub-admin account is inactive",
+        code: "STAFF_INACTIVE",
+      });
+    }
+
+    const matched = await bcrypt.compare(password, staff.password_hash);
     if (!matched) {
       return res.status(401).json({ success: false, message: "Invalid admin credentials" });
     }
 
-    const tokens = issueAdminTokens(admin, res);
-    await storeRefreshToken(admin.id, tokens.refreshToken);
+    const tokens = issueAdminTokens(staff, res);
+    await storeRefreshToken(staff.id, tokens.refreshToken);
 
     await writeAuditLog({
-      userId: admin.id,
-      action: "ADMIN_LOGIN",
+      userId: staff.id,
+      action: staff.role === "admin" ? "ADMIN_LOGIN" : "SUB_ADMIN_LOGIN",
       entityType: "admin",
-      entityId: admin.id,
+      entityId: staff.id,
       ipAddress: req.ip,
       userAgent: req.headers["user-agent"],
     });
 
     return res.json({
       success: true,
-      message: "Admin login successful",
+      message: staff.role === "admin" ? "Admin login successful" : "Sub-admin login successful",
       data: {
         admin: {
-          id: admin.id,
-          full_name: admin.full_name,
-          email: admin.email,
-          phone: admin.phone,
-          role: "admin",
+          id: staff.id,
+          full_name: staff.full_name,
+          email: staff.email,
+          phone: staff.phone,
+          role: staff.role,
+          roles: tokens.permissions,
+          permissions: tokens.permissions,
         },
         accessToken: tokens.accessToken,
         refreshToken: tokens.refreshToken,
@@ -426,6 +450,21 @@ async function updateUserKycStatus(req, res) {
         reason,
       },
     });
+
+    try {
+      const {
+        sendKycVerifiedEmail,
+        sendKycRejectedEmail,
+      } = require("../services/emailService");
+      const firstName = String(users[0].full_name || "").split(/\s+/)[0] || null;
+      if (kycStatus === "verified") {
+        await sendKycVerifiedEmail({ to: users[0].email, firstName });
+      } else {
+        await sendKycRejectedEmail({ to: users[0].email, firstName, reason });
+      }
+    } catch (mailErr) {
+      console.error("[ADMIN] KYC notification email failed:", mailErr.code || mailErr.message);
+    }
 
     return res.json({
       success: true,

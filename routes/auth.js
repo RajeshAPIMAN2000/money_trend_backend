@@ -1,27 +1,29 @@
 const express = require("express");
 const {
-  // Register/Login OTP disabled for now
-  // sendRegisterOtp,
-  // resendRegisterOtp,
-  // sendLoginOtp,
-  // resendLoginOtp,
   sendForgotPasswordOtp,
   resendForgotPasswordOtp,
   resetPassword,
   register,
   login,
+  sendLoginOtp,
+  resendLoginOtp,
+  sendEmailOtpHandler,
+  verifyEmailOtpHandler,
 } = require("../controllers/authController");
+const { emailOtpIpRateLimit } = require("../middleware/emailOtpRateLimit");
 
 const router = express.Router();
 
-// Register / Login OTP disabled — email+password (and register fields) only
-// router.post("/register/send-otp", sendRegisterOtp);
-// router.post("/register/resend-otp", resendRegisterOtp);
-// router.post("/login/send-otp", sendLoginOtp);
-// router.post("/login/resend-otp", resendLoginOtp);
+/** Secure Email OTP (Resend/SMTP abstraction) */
+router.post("/send-email-otp", emailOtpIpRateLimit, sendEmailOtpHandler);
+router.post("/verify-email-otp", emailOtpIpRateLimit, verifyEmailOtpHandler);
 
-router.post("/forgot-password/send-otp", sendForgotPasswordOtp);
-router.post("/forgot-password/resend-otp", resendForgotPasswordOtp);
+/** Login email OTP (preferred for login screen) */
+router.post("/send-login-otp", emailOtpIpRateLimit, sendLoginOtp);
+router.post("/resend-login-otp", emailOtpIpRateLimit, resendLoginOtp);
+
+router.post("/forgot-password/send-otp", emailOtpIpRateLimit, sendForgotPasswordOtp);
+router.post("/forgot-password/resend-otp", emailOtpIpRateLimit, resendForgotPasswordOtp);
 router.post("/forgot-password/reset", resetPassword);
 router.post("/register", register);
 router.post("/login", login);

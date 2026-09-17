@@ -2,6 +2,7 @@ const express = require("express");
 const { authenticate } = require("../middleware/auth");
 const {
   getWallet,
+  canInvest,
   listTransactions,
   createDeposit,
   verifyDeposit,
@@ -16,6 +17,7 @@ const router = express.Router();
 router.use(authenticate);
 
 router.get("/", getWallet);
+router.get("/can-invest", canInvest);
 router.get("/transactions", listTransactions);
 
 router.post("/deposit/create", createDeposit);

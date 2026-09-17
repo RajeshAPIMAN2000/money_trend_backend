@@ -345,6 +345,53 @@ function currentFinancialYear(date = new Date()) {
   return `${year - 1}-${year}`;
 }
 
+/**
+ * Wallet-first invest check for frontend:
+ * if balance covers principal + fee → pay from wallet;
+ * else show dummy payment gateway for the shortfall.
+ */
+async function checkInvestAffordability(userId, investAmount, productType = "FD") {
+  const principal = roundMoney(investAmount);
+  const commissionPct = getCommissionPercent();
+  const fee = roundMoney((principal * commissionPct) / 100);
+  const required = roundMoney(principal + fee);
+  const balance = roundMoney(await getBalance(userId));
+  const shortfall = roundMoney(Math.max(0, required - balance));
+  const canPayFromWallet = shortfall <= 0;
+  const purpose = String(productType || "FD").toUpperCase() === "RD" ? "rd_invest" : "fd_invest";
+  const investEndpoint =
+    purpose === "rd_invest" ? "POST /api/market/rd" : "POST /api/fd";
+
+  return {
+    product_type: String(productType || "FD").toUpperCase() === "RD" ? "RD" : "FD",
+    invest_amount: principal,
+    admin_fee_percent: commissionPct,
+    admin_fee: fee,
+    required_total: required,
+    wallet_balance: balance,
+    shortfall,
+    can_pay_from_wallet: canPayFromWallet,
+    show_payment_gateway: !canPayFromWallet,
+    flow: canPayFromWallet
+      ? "Use wallet — call invest endpoint directly (no payment gateway)"
+      : "Insufficient wallet — show dummy payment gateway, then retry invest",
+    payment:
+      canPayFromWallet
+        ? null
+        : {
+            gateway: "dummy",
+            purpose,
+            amount: shortfall,
+            currency: "INR",
+            create: "POST /api/payments/dummy/create",
+            pay: "POST /api/payments/dummy/pay",
+            body_create: { purpose, amount: shortfall },
+            demo_note: "Pay shortfall with dummy card; wallet is credited, then invest again",
+          },
+    invest_endpoint: investEndpoint,
+  };
+}
+
 module.exports = {
   roundMoney,
   getCommissionPercent,
@@ -355,4 +402,5 @@ module.exports = {
   investFromWallet,
   settleInvestmentToWallet,
   currentFinancialYear,
+  checkInvestAffordability,
 };

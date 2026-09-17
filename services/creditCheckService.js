@@ -2,9 +2,28 @@ const pool = require("../config/db");
 const { getProvider, BUREAUS } = require("./credit-bureau");
 const { encryptPii, decryptPii, maskPan } = require("../utils/security");
 const { writeAuditLog } = require("../utils/audit");
+const { buildCreditInsights } = require("./credit-bureau/normalizer");
 
-const RATE_LIMIT_HOURS = 24;
-
+/**
+ * Cooldown between credit pulls per user/phone + bureau.
+ * sandbox/mock/dev defaults to 0 (unlimited testing).
+ * Override with CREDIT_CHECK_RATE_LIMIT_HOURS or CREDIT_CHECK_DISABLE_RATE_LIMIT=true.
+ */
+function getCreditCheckRateLimitHours() {
+  if (String(process.env.CREDIT_CHECK_DISABLE_RATE_LIMIT || "").toLowerCase() === "true") {
+    return 0;
+  }
+  if (
+    process.env.CREDIT_CHECK_RATE_LIMIT_HOURS != null &&
+    String(process.env.CREDIT_CHECK_RATE_LIMIT_HOURS).trim() !== ""
+  ) {
+    const n = Number(process.env.CREDIT_CHECK_RATE_LIMIT_HOURS);
+    return Number.isFinite(n) && n >= 0 ? n : 24;
+  }
+  const mode = String(process.env.CREDIT_CHECK_MODE || "sandbox").trim().toLowerCase();
+  if (mode === "sandbox" || mode === "mock" || mode === "dev") return 0;
+  return 24;
+}
 async function loadKycForCreditCheck(userId) {
   const [users] = await pool.query(
     `SELECT id, full_name, phone, kyc_status, date_of_birth FROM users WHERE id = :userId LIMIT 1`,
@@ -55,12 +74,15 @@ async function loadKycForCreditCheck(userId) {
 
 async function hasRecentCheck(userId, bureau) {
   if (!userId) return false;
+  const hours = getCreditCheckRateLimitHours();
+  if (hours <= 0) return false;
+  const safeHours = Math.floor(hours);
   const [rows] = await pool.query(
     `SELECT id FROM credit_checks
      WHERE user_id = :userId AND bureau = :bureau
-       AND created_at >= DATE_SUB(NOW(), INTERVAL :hours HOUR)
+       AND created_at >= DATE_SUB(NOW(), INTERVAL ${safeHours} HOUR)
      LIMIT 1`,
-    { userId, bureau, hours: RATE_LIMIT_HOURS }
+    { userId, bureau }
   );
   return rows.length > 0;
 }
@@ -68,12 +90,15 @@ async function hasRecentCheck(userId, bureau) {
 async function hasRecentCheckByPhone(phone, bureau) {
   const mobile = String(phone || "").replace(/\s+/g, "").trim();
   if (!mobile) return false;
+  const hours = getCreditCheckRateLimitHours();
+  if (hours <= 0) return false;
+  const safeHours = Math.floor(hours);
   const [rows] = await pool.query(
     `SELECT id FROM credit_checks
      WHERE guest_phone = :mobile AND bureau = :bureau
-       AND created_at >= DATE_SUB(NOW(), INTERVAL :hours HOUR)
+       AND created_at >= DATE_SUB(NOW(), INTERVAL ${safeHours} HOUR)
      LIMIT 1`,
-    { mobile, bureau, hours: RATE_LIMIT_HOURS }
+    { mobile, bureau }
   );
   return rows.length > 0;
 }
@@ -123,6 +148,10 @@ async function saveCheckResult(checkId, report, errorMessage = null) {
         status: report.status,
         accounts: report.accounts,
         enquiries: report.enquiries,
+        insights: report.insights || null,
+        is_mock: Boolean(report.is_mock),
+        data_source: report.data_source || null,
+        disclaimer: report.disclaimer || null,
       }
     : null;
 
@@ -284,6 +313,7 @@ async function runCreditCheck({
 /**
  * Public / no-login CIBIL pull using details entered on the form.
  * Links to an existing user by phone when found; otherwise stores as guest.
+ * When bureau is CIBIL (default), also pulls EXPERIAN + EQUIFAX and stores all rows.
  */
 async function runPublicCreditCheck({
   bureau = "CIBIL",
@@ -322,21 +352,53 @@ async function runPublicCreditCheck({
   );
   const userId = users[0]?.id || null;
 
+  const applicantInput = {
+    userId,
+    fullName: cleanName,
+    pan: cleanPan,
+    mobile: cleanMobile,
+    dob: dobParsed.iso,
+    aadhaarLast4: null,
+    address: address || null,
+  };
+
+  const consent = {
+    consentGiven,
+    consentTimestamp,
+    consentIp,
+    consentVersion,
+  };
+
+  const requestedBureau = String(bureau || "CIBIL").toUpperCase();
+  const multiEnabled =
+    String(process.env.CIBIL_MULTI_BUREAU || "true").toLowerCase() !== "false";
+
+  if (requestedBureau === "CIBIL" && multiEnabled) {
+    return runCibilMultiBureauCheck({
+      userId,
+      requestedBy: "USER",
+      applicantInput,
+      ...consent,
+    });
+  }
+
   if (userId) {
-    const recent = await hasRecentCheck(userId, bureau);
+    const recent = await hasRecentCheck(userId, requestedBureau);
     if (recent) {
+      const hours = getCreditCheckRateLimitHours();
       const err = new Error(
-        `Credit check for ${bureau} already performed within the last ${RATE_LIMIT_HOURS} hours`
+        `Credit check for ${requestedBureau} already performed within the last ${hours} hours`
       );
       err.status = 429;
       err.code = "BUREAU_RATE_LIMITED";
       throw err;
     }
   } else {
-    const recent = await hasRecentCheckByPhone(cleanMobile, bureau);
+    const recent = await hasRecentCheckByPhone(cleanMobile, requestedBureau);
     if (recent) {
+      const hours = getCreditCheckRateLimitHours();
       const err = new Error(
-        `Credit check for ${bureau} already performed within the last ${RATE_LIMIT_HOURS} hours`
+        `Credit check for ${requestedBureau} already performed within the last ${hours} hours`
       );
       err.status = 429;
       err.code = "BUREAU_RATE_LIMITED";
@@ -346,22 +408,194 @@ async function runPublicCreditCheck({
 
   return runCreditCheck({
     userId,
-    bureau,
+    bureau: requestedBureau,
     requestedBy: "USER",
-    consentGiven,
-    consentTimestamp,
-    consentIp,
-    consentVersion,
-    applicantInput: {
-      userId,
-      fullName: cleanName,
-      pan: cleanPan,
-      mobile: cleanMobile,
-      dob: dobParsed.iso,
-      aadhaarLast4: null,
-      address: address || null,
-    },
+    ...consent,
+    applicantInput,
   });
+}
+
+/**
+ * CIBIL section suite: store CIBIL + EXPERIAN + EQUIFAX rows for the same applicant.
+ * Primary response remains CIBIL-labeled for the UI score card.
+ */
+async function runCibilMultiBureauCheck({
+  userId = null,
+  requestedBy = "USER",
+  applicantInput = null,
+  consentGiven,
+  consentTimestamp,
+  consentIp,
+  consentVersion,
+}) {
+  const suiteBureaus = String(process.env.CIBIL_SUITE_BUREAUS || "CIBIL,EXPERIAN,EQUIFAX")
+    .split(",")
+    .map((b) => b.trim().toUpperCase())
+    .filter(Boolean);
+
+  const scores = {};
+  const errors = [];
+  const checks = [];
+
+  for (const bureau of suiteBureaus) {
+    try {
+      if (userId) {
+        const recent = await hasRecentCheck(userId, bureau);
+        if (recent) {
+          errors.push({
+            bureau,
+            error: `Already checked within last ${getCreditCheckRateLimitHours()} hours`,
+            code: "BUREAU_RATE_LIMITED",
+          });
+          continue;
+        }
+      } else if (applicantInput?.mobile) {
+        const recent = await hasRecentCheckByPhone(applicantInput.mobile, bureau);
+        if (recent) {
+          errors.push({
+            bureau,
+            error: `Already checked within last ${getCreditCheckRateLimitHours()} hours`,
+            code: "BUREAU_RATE_LIMITED",
+          });
+          continue;
+        }
+      }
+
+      const result = await runCreditCheck({
+        userId,
+        bureau,
+        requestedBy,
+        consentGiven,
+        consentTimestamp,
+        consentIp,
+        consentVersion,
+        applicantInput,
+      });
+      scores[bureau.toLowerCase()] = result;
+      checks.push(result);
+    } catch (error) {
+      errors.push({
+        bureau,
+        error: error.message,
+        code: error.code || "BUREAU_FAILED",
+      });
+    }
+  }
+
+  const primary =
+    scores.cibil || scores.experian || scores.equifax || checks[0] || null;
+
+  if (!primary) {
+    const err = new Error(
+      errors[0]?.error || "All bureau pulls failed for CIBIL multi-bureau check"
+    );
+    err.code = errors[0]?.code || "CREDIT_CHECK_FAILED";
+    err.status = 502;
+    err.details = errors;
+    throw err;
+  }
+
+  return {
+    ...primary,
+    suite: "CIBIL_MULTI_BUREAU",
+    score_label: primary.score_label || "CIBIL Score",
+    scores: {
+      cibil: scores.cibil || null,
+      experian: scores.experian || null,
+      equifax: scores.equifax || null,
+    },
+    checks,
+    suite_errors: errors,
+    reportAvailable: checks.some((c) => c.reportAvailable),
+    stored_bureaus: checks.map((c) => c.bureau),
+  };
+}
+
+/**
+ * Build a user-downloadable credit report from a stored check (JSON).
+ */
+async function buildCreditReportDownload(checkId, { requesterUserId = null, guestPhone = null, isAdmin = false } = {}) {
+  const row = await getCheckById(checkId);
+  if (!row) {
+    const err = new Error("Credit report not found");
+    err.code = "NOT_FOUND";
+    err.status = 404;
+    throw err;
+  }
+
+  if (!isAdmin) {
+    if (row.user_id) {
+      if (!requesterUserId || Number(row.user_id) !== Number(requesterUserId)) {
+        const err = new Error("Access denied for this credit report");
+        err.code = "FORBIDDEN";
+        err.status = 403;
+        throw err;
+      }
+    } else if (row.guest_phone) {
+      const mobile = String(guestPhone || "").replace(/\s+/g, "").trim();
+      if (!mobile || String(row.guest_phone) !== mobile) {
+        const err = new Error("Pass matching ?mobile= to download this guest credit report");
+        err.code = "FORBIDDEN";
+        err.status = 403;
+        throw err;
+      }
+    }
+  }
+
+  const detail = formatCheckDetail(row);
+  return {
+    report_type: "credit_report",
+    download_format: "json",
+    generated_at: new Date().toISOString(),
+    bureau: detail.bureau,
+    score_label: detail.score_label,
+    score: detail.score,
+    score_band: detail.score_band,
+    status: detail.status,
+    report_ref_id: detail.report_ref_id,
+    report_date: detail.report_date,
+    insights: detail.insights,
+    accounts: detail.accounts,
+    enquiries: detail.enquiries,
+    summary: detail.result_summary,
+    report: detail.report,
+    is_mock: detail.is_mock,
+    data_source: detail.data_source,
+    check_id: detail.id,
+    disclaimer:
+      detail.disclaimer ||
+      "This report is generated from stored bureau data on MoneyTrend. For official disputes, contact the respective credit bureau.",
+  };
+}
+
+async function getLatestReportBundle({ userId = null, mobile = null } = {}) {
+  let scores;
+  if (userId) scores = await getLatestScores(userId);
+  else if (mobile) scores = await getLatestScoresByPhone(mobile);
+  else {
+    const err = new Error("userId or mobile is required");
+    err.code = "VALIDATION_ERROR";
+    throw err;
+  }
+
+  const reports = {};
+  for (const [bureau, summary] of Object.entries(scores.scores_by_bureau || {})) {
+    if (!summary?.id) continue;
+    try {
+      reports[bureau.toLowerCase()] = await buildCreditReportDownload(summary.id, {
+        requesterUserId: userId,
+        guestPhone: mobile,
+      });
+    } catch (_e) {
+      // skip inaccessible
+    }
+  }
+
+  return {
+    ...scores,
+    reports,
+    downloadable: Object.keys(reports),
+  };
 }
 
 async function getCheckById(checkId) {
@@ -406,6 +640,7 @@ function deriveScoreBand(bureau, score) {
 function scoreLabel(bureau) {
   if (String(bureau).toUpperCase() === "EXPERIAN") return "Experian Credit Score";
   if (String(bureau).toUpperCase() === "CIBIL") return "CIBIL Score";
+  if (String(bureau).toUpperCase() === "EQUIFAX") return "Equifax Credit Score";
   return `${String(bureau).toUpperCase()} Credit Score`;
 }
 
@@ -455,6 +690,9 @@ function formatCheckSummary(row) {
           reportRefId: normalized.reportRefId,
           accountCount: Array.isArray(normalized.accounts) ? normalized.accounts.length : 0,
           enquiryCount: Array.isArray(normalized.enquiries) ? normalized.enquiries.length : 0,
+          insights: normalized.insights || null,
+          is_mock: Boolean(normalized.is_mock),
+          data_source: normalized.data_source || null,
         }
       : null,
   };
@@ -491,7 +729,29 @@ function formatCheckDetail(row) {
     purpose: e.purpose,
   }));
   summary.pan_number = maskPan(decryptPii(row.pan_number) || row.pan_number);
-  // Keep normalized accounts/enquiries summary for clients that expect it — never rawResponse.
+
+  const insights =
+    normalized?.insights || buildCreditInsights(summary.accounts, summary.enquiries);
+  summary.insights = insights;
+  summary.is_mock = Boolean(normalized?.is_mock);
+  summary.data_source = normalized?.data_source || (summary.is_mock ? "MOCK_SANDBOX" : "BUREAU");
+  summary.disclaimer = normalized?.disclaimer || null;
+
+  summary.report = {
+    score: summary.score,
+    score_band: summary.score_band,
+    score_label: summary.score_label,
+    bureau: summary.bureau,
+    status: summary.status,
+    report_date: summary.report_date,
+    insights,
+    accounts: summary.accounts,
+    enquiries: summary.enquiries,
+    is_mock: summary.is_mock,
+    data_source: summary.data_source,
+    disclaimer: summary.disclaimer,
+  };
+
   if (normalized) {
     summary.normalized_report = {
       bureau: normalized.bureau,
@@ -500,6 +760,9 @@ function formatCheckDetail(row) {
       reportDate: normalized.reportDate,
       reportRefId: normalized.reportRefId,
       status: normalized.status,
+      insights: normalized.insights || insights,
+      is_mock: Boolean(normalized.is_mock),
+      data_source: normalized.data_source || null,
     };
   }
   return summary;
@@ -601,7 +864,8 @@ async function getLatestScores(userId) {
 
   const cibil = byBureau.CIBIL || null;
   const experian = byBureau.EXPERIAN || null;
-  const primary = cibil || experian || (rows[0] ? formatCheckSummary(rows[0]) : null);
+  const equifax = byBureau.EQUIFAX || null;
+  const primary = cibil || equifax || experian || (rows[0] ? formatCheckSummary(rows[0]) : null);
 
   return {
     user_id: Number(userId),
@@ -626,6 +890,16 @@ async function getLatestScores(userId) {
           status: cibil.status,
           checked_at: cibil.created_at,
           report_ref_id: cibil.report_ref_id,
+        }
+      : null,
+    equifax_score: equifax
+      ? {
+          score: equifax.score,
+          score_band: equifax.score_band,
+          score_label: equifax.score_label,
+          status: equifax.status,
+          checked_at: equifax.created_at,
+          report_ref_id: equifax.report_ref_id,
         }
       : null,
     scores_by_bureau: byBureau,
@@ -657,7 +931,8 @@ async function getLatestScoresByPhone(phone) {
   }
   const cibil = byBureau.CIBIL || null;
   const experian = byBureau.EXPERIAN || null;
-  const primary = cibil || experian || (rows[0] ? formatCheckSummary(rows[0]) : null);
+  const equifax = byBureau.EQUIFAX || null;
+  const primary = cibil || equifax || experian || (rows[0] ? formatCheckSummary(rows[0]) : null);
 
   return {
     guest_phone: mobile,
@@ -682,6 +957,16 @@ async function getLatestScoresByPhone(phone) {
           status: cibil.status,
           checked_at: cibil.created_at,
           report_ref_id: cibil.report_ref_id,
+        }
+      : null,
+    equifax_score: equifax
+      ? {
+          score: equifax.score,
+          score_band: equifax.score_band,
+          score_label: equifax.score_label,
+          status: equifax.status,
+          checked_at: equifax.created_at,
+          report_ref_id: equifax.report_ref_id,
         }
       : null,
     scores_by_bureau: byBureau,
@@ -857,12 +1142,16 @@ async function runAllBureaus({
 }
 
 module.exports = {
-  RATE_LIMIT_HOURS,
+  get RATE_LIMIT_HOURS() {
+    return getCreditCheckRateLimitHours();
+  },
+  getCreditCheckRateLimitHours,
   loadKycForCreditCheck,
   hasRecentCheck,
   hasRecentCheckByPhone,
   runCreditCheck,
   runPublicCreditCheck,
+  runCibilMultiBureauCheck,
   runAllBureaus,
   getHistory,
   getHistoryByPhone,
@@ -874,5 +1163,7 @@ module.exports = {
   getLatestScores,
   getLatestScoresByPhone,
   getLatestScoresMapForUsers,
+  buildCreditReportDownload,
+  getLatestReportBundle,
   deriveScoreBand,
 };

@@ -26,31 +26,95 @@ function normalizeEnquiries(enquiries = []) {
   }));
 }
 
+/**
+ * CIBIL-app style counts for UI: accounts, loans, cards, enquiries, overdues.
+ */
+function buildCreditInsights(accounts = [], enquiries = []) {
+  const list = Array.isArray(accounts) ? accounts : [];
+  const enq = Array.isArray(enquiries) ? enquiries : [];
+
+  const typeOf = (a) => String(a.accountType || a.account_type || "").toLowerCase();
+  const statusOf = (a) => String(a.status || "").toLowerCase();
+  const overdueOf = (a) => Number(a.overdueAmount ?? a.overdue_amount ?? 0) || 0;
+  const limitOf = (a) => Number(a.creditLimit ?? a.credit_limit ?? 0) || 0;
+  const balOf = (a) => Number(a.currentBalance ?? a.current_balance ?? 0) || 0;
+
+  const isCard = (a) => /credit\s*card|\bcc\b|card/.test(typeOf(a));
+  const isLoan = (a) =>
+    /loan|housing|home|auto|vehicle|education|gold|personal|consumer|mortgage|od|overdraft/.test(
+      typeOf(a)
+    ) || (!isCard(a) && Boolean(typeOf(a)));
+  const isActive = (a) => /active|open|current|live/.test(statusOf(a));
+  const isClosed = (a) => /closed|paid|settled|written|write.?off|inactive/.test(statusOf(a));
+
+  const overdueAccounts = list.filter((a) => overdueOf(a) > 0);
+  const cards = list.filter(isCard);
+  const loans = list.filter((a) => isLoan(a) && !isCard(a));
+
+  return {
+    total_accounts: list.length,
+    active_accounts: list.filter(isActive).length,
+    closed_accounts: list.filter(isClosed).length,
+    credit_cards: cards.length,
+    loans: loans.length,
+    total_enquiries: enq.length,
+    overdue_accounts: overdueAccounts.length,
+    total_overdue_amount: overdueAccounts.reduce((s, a) => s + overdueOf(a), 0),
+    total_credit_limit: list.reduce((s, a) => s + limitOf(a), 0),
+    total_current_balance: list.reduce((s, a) => s + balOf(a), 0),
+  };
+}
+
+function withInsights(report, raw) {
+  const accounts = report.accounts || [];
+  const enquiries = report.enquiries || [];
+  const insights = buildCreditInsights(accounts, enquiries);
+  const isMock = Boolean(raw?._mock || raw?._dataSource === "MOCK_SANDBOX");
+  return {
+    ...report,
+    insights,
+    is_mock: isMock,
+    data_source: isMock
+      ? "MOCK_SANDBOX"
+      : raw?._providerBackend || raw?._dataSource || "BUREAU",
+    disclaimer: isMock
+      ? raw?._disclaimer ||
+        "Sandbox mock only — not a real TransUnion CIBIL report. Live bureau credentials are required for accurate PAN-based data."
+      : undefined,
+  };
+}
+
 function normalizeCibil(raw) {
   if (raw.status === "NO_HIT") {
-    return {
+    return withInsights(
+      {
+        bureau: "CIBIL",
+        score: null,
+        scoreRange: BUREAU_SCORE_RANGES.CIBIL,
+        reportDate: raw.reportDate,
+        reportRefId: raw.reportRefId,
+        status: "NO_HIT",
+        accounts: [],
+        enquiries: [],
+        rawResponse: raw,
+      },
+      raw
+    );
+  }
+  return withInsights(
+    {
       bureau: "CIBIL",
-      score: null,
+      score: raw.score ?? null,
       scoreRange: BUREAU_SCORE_RANGES.CIBIL,
       reportDate: raw.reportDate,
-      reportRefId: raw.reportRefId,
-      status: "NO_HIT",
-      accounts: [],
-      enquiries: [],
+      reportRefId: raw.bureauRefId || raw.reportRefId,
+      status: "SUCCESS",
+      accounts: normalizeAccounts(raw.accounts || []),
+      enquiries: normalizeEnquiries(raw.enquiries || []),
       rawResponse: raw,
-    };
-  }
-  return {
-    bureau: "CIBIL",
-    score: raw.score ?? null,
-    scoreRange: BUREAU_SCORE_RANGES.CIBIL,
-    reportDate: raw.reportDate,
-    reportRefId: raw.bureauRefId || raw.reportRefId,
-    status: "SUCCESS",
-    accounts: normalizeAccounts(raw.accounts || []),
-    enquiries: normalizeEnquiries(raw.enquiries || []),
-    rawResponse: raw,
-  };
+    },
+    raw
+  );
 }
 
 function normalizeExperian(raw) {
@@ -67,87 +131,105 @@ function normalizeExperian(raw) {
     profile.enquiries ||
     [];
 
-  if (raw.status === "NO_HIT" || score === null) {
-    return {
-      bureau: "EXPERIAN",
-      score: null,
-      scoreRange: BUREAU_SCORE_RANGES.EXPERIAN,
-      reportDate: header.ReportDate || raw.reportDate,
-      reportRefId: header.ReportNumber || raw.reportRefId,
-      status: raw.status === "NO_HIT" ? "NO_HIT" : "SUCCESS",
-      accounts: [],
-      enquiries: [],
-      rawResponse: raw,
-    };
+  if (raw.status === "NO_HIT" || (score === null && !raw._mock)) {
+    return withInsights(
+      {
+        bureau: "EXPERIAN",
+        score: null,
+        scoreRange: BUREAU_SCORE_RANGES.EXPERIAN,
+        reportDate: header.ReportDate || raw.reportDate,
+        reportRefId: header.ReportNumber || raw.reportRefId,
+        status: raw.status === "NO_HIT" ? "NO_HIT" : "SUCCESS",
+        accounts: [],
+        enquiries: [],
+        rawResponse: raw,
+      },
+      raw
+    );
   }
 
-  return {
-    bureau: "EXPERIAN",
-    score: Number(score),
-    scoreRange: BUREAU_SCORE_RANGES.EXPERIAN,
-    reportDate: header.ReportDate || new Date().toISOString().slice(0, 10),
-    reportRefId: header.ReportNumber || `EXP-${Date.now()}`,
-    status: "SUCCESS",
-    accounts: normalizeAccounts(Array.isArray(accountsRaw) ? accountsRaw : [accountsRaw]),
-    enquiries: normalizeEnquiries(Array.isArray(enquiriesRaw) ? enquiriesRaw : [enquiriesRaw]),
-    rawResponse: raw,
-  };
+  return withInsights(
+    {
+      bureau: "EXPERIAN",
+      score: Number(score),
+      scoreRange: BUREAU_SCORE_RANGES.EXPERIAN,
+      reportDate: header.ReportDate || new Date().toISOString().slice(0, 10),
+      reportRefId: header.ReportNumber || `EXP-${Date.now()}`,
+      status: "SUCCESS",
+      accounts: normalizeAccounts(Array.isArray(accountsRaw) ? accountsRaw : [accountsRaw]),
+      enquiries: normalizeEnquiries(Array.isArray(enquiriesRaw) ? enquiriesRaw : [enquiriesRaw]),
+      rawResponse: raw,
+    },
+    raw
+  );
 }
 
 function normalizeEquifax(raw) {
   if (raw.status === "NO_HIT") {
-    return {
-      bureau: "EQUIFAX",
-      score: null,
-      scoreRange: BUREAU_SCORE_RANGES.EQUIFAX,
-      reportDate: raw.reportDate,
-      reportRefId: raw.reportRefId,
-      status: "NO_HIT",
-      accounts: [],
-      enquiries: [],
-      rawResponse: raw,
-    };
+    return withInsights(
+      {
+        bureau: "EQUIFAX",
+        score: null,
+        scoreRange: BUREAU_SCORE_RANGES.EQUIFAX,
+        reportDate: raw.reportDate,
+        reportRefId: raw.reportRefId,
+        status: "NO_HIT",
+        accounts: [],
+        enquiries: [],
+        rawResponse: raw,
+      },
+      raw
+    );
   }
   const range = raw.scoreRange || BUREAU_SCORE_RANGES.EQUIFAX;
-  return {
-    bureau: "EQUIFAX",
-    score: raw.scoreValue ?? raw.score ?? null,
-    scoreRange: { min: range.minimum ?? range.min ?? 300, max: range.maximum ?? range.max ?? 900 },
-    reportDate: raw.generatedOn || raw.reportDate,
-    reportRefId: raw.equifaxReportId || raw.reportRefId,
-    status: "SUCCESS",
-    accounts: normalizeAccounts(raw.tradeLines || raw.accounts || []),
-    enquiries: normalizeEnquiries(raw.inquiryHistory || raw.enquiries || []),
-    rawResponse: raw,
-  };
+  return withInsights(
+    {
+      bureau: "EQUIFAX",
+      score: raw.scoreValue ?? raw.score ?? null,
+      scoreRange: { min: range.minimum ?? range.min ?? 300, max: range.maximum ?? range.max ?? 900 },
+      reportDate: raw.generatedOn || raw.reportDate,
+      reportRefId: raw.equifaxReportId || raw.reportRefId,
+      status: "SUCCESS",
+      accounts: normalizeAccounts(raw.tradeLines || raw.accounts || []),
+      enquiries: normalizeEnquiries(raw.inquiryHistory || raw.enquiries || []),
+      rawResponse: raw,
+    },
+    raw
+  );
 }
 
 function normalizeCrif(raw) {
   if (raw.status === "NO_HIT") {
-    return {
-      bureau: "CRIF",
-      score: null,
-      scoreRange: BUREAU_SCORE_RANGES.CRIF,
-      reportDate: raw.reportDate,
-      reportRefId: raw.reportRefId,
-      status: "NO_HIT",
-      accounts: [],
-      enquiries: [],
-      rawResponse: raw,
-    };
+    return withInsights(
+      {
+        bureau: "CRIF",
+        score: null,
+        scoreRange: BUREAU_SCORE_RANGES.CRIF,
+        reportDate: raw.reportDate,
+        reportRefId: raw.reportRefId,
+        status: "NO_HIT",
+        accounts: [],
+        enquiries: [],
+        rawResponse: raw,
+      },
+      raw
+    );
   }
   const band = raw.scoreBand || BUREAU_SCORE_RANGES.CRIF;
-  return {
-    bureau: "CRIF",
-    score: raw.performScore ?? raw.score ?? null,
-    scoreRange: { min: band.low ?? band.min ?? 300, max: band.high ?? band.max ?? 900 },
-    reportDate: raw.reportGeneratedDate || raw.reportDate,
-    reportRefId: raw.reportId || raw.reportRefId,
-    status: "SUCCESS",
-    accounts: normalizeAccounts(raw.loanDetails || raw.accounts || []),
-    enquiries: normalizeEnquiries(raw.enquiryList || raw.enquiries || []),
-    rawResponse: raw,
-  };
+  return withInsights(
+    {
+      bureau: "CRIF",
+      score: raw.performScore ?? raw.score ?? null,
+      scoreRange: { min: band.low ?? band.min ?? 300, max: band.high ?? band.max ?? 900 },
+      reportDate: raw.reportGeneratedDate || raw.reportDate,
+      reportRefId: raw.reportId || raw.reportRefId,
+      status: "SUCCESS",
+      accounts: normalizeAccounts(raw.loanDetails || raw.accounts || []),
+      enquiries: normalizeEnquiries(raw.enquiryList || raw.enquiries || []),
+      rawResponse: raw,
+    },
+    raw
+  );
 }
 
 function normalize(bureau, raw) {
@@ -171,4 +253,5 @@ module.exports = {
   normalize,
   normalizeAccounts,
   normalizeEnquiries,
+  buildCreditInsights,
 };

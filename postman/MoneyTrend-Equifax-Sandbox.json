@@ -1,0 +1,136 @@
+{
+  "info": {
+    "name": "MoneyTrend - Equifax CES Sandbox",
+    "description": "MoneyTrend backend only. Never put Equifax keys/tokens in Postman. Use MoneyTrend JWT for Authorization.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "BASE_URL", "value": "http://localhost:4000" },
+    { "key": "MONEYTREND_TOKEN", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "01 Auth health",
+      "item": [
+        {
+          "name": "GET /api/equifax/health",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{MONEYTREND_TOKEN}}" }],
+            "url": "{{BASE_URL}}/api/equifax/health"
+          }
+        },
+        {
+          "name": "POST /api/equifax/test/auth enrollment",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{MONEYTREND_TOKEN}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\"kind\":\"enrollment\"}" },
+            "url": "{{BASE_URL}}/api/equifax/test/auth"
+          }
+        },
+        {
+          "name": "POST /api/equifax/test/auth delivery",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{MONEYTREND_TOKEN}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\"kind\":\"delivery\"}" },
+            "url": "{{BASE_URL}}/api/equifax/test/auth"
+          }
+        }
+      ]
+    },
+    {
+      "name": "02 Enrollment",
+      "item": [
+        {
+          "name": "POST /api/credit-check/enrollment",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{MONEYTREND_TOKEN}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"consent_given\": true,\n  \"consent_version\": \"v1.0\",\n  \"enrollmentSubject\": {\n    \"REPLACE\": \"with exact Equifax EnrollmentSubject from API docs\"\n  },\n  \"featureCodes\": [\"ONE_B_SCORE\", \"ONE_B_REPORT\", \"THREE_B_CREDIT_MONITORING_OFFLINE\"]\n}"
+            },
+            "url": "{{BASE_URL}}/api/credit-check/enrollment"
+          }
+        },
+        {
+          "name": "GET /api/credit-check/enrollment",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{MONEYTREND_TOKEN}}" }],
+            "url": "{{BASE_URL}}/api/credit-check/enrollment"
+          }
+        }
+      ]
+    },
+    {
+      "name": "03 Score",
+      "item": [
+        {
+          "name": "GET score/latest",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{MONEYTREND_TOKEN}}" },
+              { "key": "featureName", "value": "ONE_B_VANTAGE_SCORE_4" }
+            ],
+            "url": "{{BASE_URL}}/api/credit-check/score/latest"
+          }
+        },
+        {
+          "name": "GET score/history",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{MONEYTREND_TOKEN}}" }],
+            "url": "{{BASE_URL}}/api/credit-check/score/history?historicalLimit=12"
+          }
+        }
+      ]
+    },
+    {
+      "name": "04 Report",
+      "item": [
+        {
+          "name": "GET report",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{MONEYTREND_TOKEN}}" }],
+            "url": "{{BASE_URL}}/api/credit-check/report"
+          }
+        },
+        {
+          "name": "GET report/summary",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{MONEYTREND_TOKEN}}" }],
+            "url": "{{BASE_URL}}/api/credit-check/report/summary"
+          }
+        }
+      ]
+    },
+    {
+      "name": "05 Monitoring",
+      "item": [
+        {
+          "name": "GET monitoring",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{MONEYTREND_TOKEN}}" }],
+            "url": "{{BASE_URL}}/api/credit-check/monitoring"
+          }
+        }
+      ]
+    }
+  ]
+}

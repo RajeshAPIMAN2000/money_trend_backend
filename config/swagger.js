@@ -52,7 +52,7 @@ const options = {
             confirm_password: { type: "string", example: "Secret@123" },
             phone: { type: "string", example: "9876543210" },
             date_of_birth: { type: "string", example: "1995-08-15", description: "YYYY-MM-DD or DD-MM-YYYY" },
-            // otp: { type: "string", example: "123456", description: "Register OTP currently disabled" },
+            otp: { type: "string", example: "483921", description: "Email OTP for EMAIL_VERIFICATION (or verify beforehand)" },
           },
         },
         LoginBody: {
@@ -61,7 +61,7 @@ const options = {
           properties: {
             email: { type: "string", example: "user@example.com" },
             password: { type: "string", example: "Secret@123" },
-            // otp: { type: "string", example: "123456", description: "Login OTP currently disabled" },
+            otp: { type: "string", example: "483921", description: "Email OTP for LOGIN_VERIFICATION when EMAIL_OTP_LOGIN_REQUIRED=true" },
           },
         },
         // Register/Login OTP schemas kept for when OTP is re-enabled
@@ -394,11 +394,77 @@ const options = {
           responses: { 200: { description: "Banner detail" }, 404: { description: "Not found" } },
         },
       },
-      // Register / Login OTP routes currently disabled
-      // "/auth/register/send-otp": { ... },
-      // "/auth/register/resend-otp": { ... },
-      // "/auth/login/send-otp": { ... },
-      // "/auth/login/resend-otp": { ... },
+      "/auth/send-email-otp": {
+        post: {
+          tags: ["Auth"],
+          summary: "Send Email OTP (Resend/SMTP)",
+          description:
+            "Sends a 6-digit email OTP for EMAIL_VERIFICATION, LOGIN_VERIFICATION, PASSWORD_RESET, CHANGE_EMAIL, or TRANSACTION_VERIFICATION. Never returns the OTP.",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["email", "purpose"],
+                  properties: {
+                    email: { type: "string", example: "user@example.com" },
+                    purpose: {
+                      type: "string",
+                      enum: [
+                        "EMAIL_VERIFICATION",
+                        "LOGIN_VERIFICATION",
+                        "PASSWORD_RESET",
+                        "CHANGE_EMAIL",
+                        "TRANSACTION_VERIFICATION",
+                      ],
+                      example: "EMAIL_VERIFICATION",
+                    },
+                    password: {
+                      type: "string",
+                      description: "Optional for LOGIN_VERIFICATION — validates credentials before sending",
+                    },
+                    first_name: { type: "string" },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            200: { description: "Generic success (enumeration-safe)" },
+            429: { description: "Cooldown or rate limited" },
+          },
+        },
+      },
+      "/auth/verify-email-otp": {
+        post: {
+          tags: ["Auth"],
+          summary: "Verify Email OTP",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["email", "otp", "purpose"],
+                  properties: {
+                    email: { type: "string", example: "user@example.com" },
+                    otp: { type: "string", example: "483921" },
+                    purpose: {
+                      type: "string",
+                      example: "EMAIL_VERIFICATION",
+                    },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            200: { description: "OTP verified" },
+            400: { description: "Invalid/expired OTP" },
+          },
+        },
+      },
       "/auth/forgot-password/send-otp": {
         post: {
           tags: ["Auth"],
@@ -457,15 +523,16 @@ const options = {
       "/auth/register": {
         post: {
           tags: ["Auth"],
-          summary: "User register (OTP disabled)",
-          description: "Register with full name, email, password, phone and DOB. OTP not required.",
+          summary: "User register (requires Email OTP)",
+          description:
+            "Requires prior EMAIL_VERIFICATION via /auth/send-email-otp + /auth/verify-email-otp, or pass otp in body.",
           requestBody: {
             required: true,
             content: { "application/json": { schema: { $ref: "#/components/schemas/RegisterBody" } } },
           },
           responses: {
             201: { description: "Registered — next_step kyc" },
-            400: { description: "Validation error" },
+            400: { description: "Validation or OTP required" },
             409: { description: "Email/phone exists" },
           },
         },
@@ -473,8 +540,9 @@ const options = {
       "/auth/login": {
         post: {
           tags: ["Auth"],
-          summary: "User login (OTP disabled)",
-          description: "Login with email and password. OTP not required.",
+          summary: "User login (Email OTP required by default)",
+          description:
+            "Send LOGIN_VERIFICATION OTP via /auth/send-email-otp (with password), then login with email, password and otp. Set EMAIL_OTP_LOGIN_REQUIRED=false to skip OTP.",
           requestBody: {
             required: true,
             content: { "application/json": { schema: { $ref: "#/components/schemas/LoginBody" } } },
@@ -1840,6 +1908,32 @@ const options = {
             { name: "offset", in: "query", schema: { type: "integer" } },
           ],
           responses: { 200: { description: "Admin credit-check list" } },
+        },
+      },
+      "/admin/credit-checks/equifax/status": {
+        get: {
+          tags: ["Admin"],
+          summary: "Equifax CDS integration status (scopes, endpoints, credentials present)",
+          security: [{ bearerAuth: [] }],
+          responses: { 200: { description: "Status + go-live checklist (no secrets)" } },
+        },
+      },
+      "/admin/credit-checks/equifax/token-test": {
+        post: {
+          tags: ["Admin"],
+          summary: "Test Equifax OAuth token (client credentials + CDS scopes)",
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: { requestToken: { type: "boolean", example: true } },
+                },
+              },
+            },
+          },
+          responses: { 200: { description: "Token test result without returning access_token" } },
         },
       },
       "/admin/credit-checks/{id}": {

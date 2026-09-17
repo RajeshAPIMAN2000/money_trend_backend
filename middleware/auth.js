@@ -1,4 +1,10 @@
 const { verifyAccessToken } = require("../utils/jwt");
+const {
+  isStaff,
+  isFullAdmin,
+  hasPermission,
+  parsePermissionsJson,
+} = require("../services/staffPermissionService");
 
 function authenticate(req, res, next) {
   try {
@@ -19,6 +25,9 @@ function authenticate(req, res, next) {
       id: decoded.sub,
       email: decoded.email,
       role: decoded.role || "user",
+      permissions: Array.isArray(decoded.permissions)
+        ? decoded.permissions
+        : parsePermissionsJson(decoded.permissions),
     };
     return next();
   } catch (_error) {
@@ -45,6 +54,9 @@ function optionalAuthenticate(req, _res, next) {
       id: decoded.sub,
       email: decoded.email,
       role: decoded.role || "user",
+      permissions: Array.isArray(decoded.permissions)
+        ? decoded.permissions
+        : parsePermissionsJson(decoded.permissions),
     };
   } catch (_error) {
     req.user = null;
@@ -52,8 +64,9 @@ function optionalAuthenticate(req, _res, next) {
   return next();
 }
 
+/** Full admin only */
 function requireAdmin(req, res, next) {
-  if (!req.user || req.user.role !== "admin") {
+  if (!isFullAdmin(req.user)) {
     return res.status(403).json({
       success: false,
       message: "Admin access required",
@@ -62,4 +75,42 @@ function requireAdmin(req, res, next) {
   return next();
 }
 
-module.exports = { authenticate, optionalAuthenticate, requireAdmin };
+/** Admin or sub-admin */
+function requireStaff(req, res, next) {
+  if (!isStaff(req.user)) {
+    return res.status(403).json({
+      success: false,
+      message: "Staff access required",
+    });
+  }
+  return next();
+}
+
+/** Admin always allowed; sub-admin needs the given permission key (seo|blog|news) */
+function requirePermission(permissionKey) {
+  return (req, res, next) => {
+    if (!isStaff(req.user)) {
+      return res.status(403).json({
+        success: false,
+        message: "Staff access required",
+      });
+    }
+    if (!hasPermission(req.user, permissionKey)) {
+      return res.status(403).json({
+        success: false,
+        message: `Missing permission: ${permissionKey}`,
+        code: "PERMISSION_DENIED",
+        required: permissionKey,
+      });
+    }
+    return next();
+  };
+}
+
+module.exports = {
+  authenticate,
+  optionalAuthenticate,
+  requireAdmin,
+  requireStaff,
+  requirePermission,
+};

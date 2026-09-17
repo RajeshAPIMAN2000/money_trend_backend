@@ -158,6 +158,22 @@ async function submitManualKyc(req, res) {
       { userId }
     );
 
+    try {
+      const [urows] = await pool.query(
+        `SELECT full_name, email FROM users WHERE id = :userId LIMIT 1`,
+        { userId }
+      );
+      if (urows[0]?.email) {
+        const { sendKycSubmittedEmail } = require("../services/emailService");
+        await sendKycSubmittedEmail({
+          to: urows[0].email,
+          firstName: String(urows[0].full_name || "").split(/\s+/)[0] || null,
+        });
+      }
+    } catch (mailErr) {
+      console.error("[KYC] submitted email failed:", mailErr.code || mailErr.message);
+    }
+
     return res.status(201).json({
       success: true,
       message: "Manual KYC submitted successfully. Please enter nominee details.",
@@ -276,6 +292,22 @@ async function submitDigilockerKyc(req, res) {
       `UPDATE users SET kyc_status = 'submitted', kyc_method = 'digilocker' WHERE id = :userId`,
       { userId }
     );
+
+    try {
+      const [urows] = await pool.query(
+        `SELECT full_name, email FROM users WHERE id = :userId LIMIT 1`,
+        { userId }
+      );
+      if (urows[0]?.email) {
+        const { sendKycSubmittedEmail } = require("../services/emailService");
+        await sendKycSubmittedEmail({
+          to: urows[0].email,
+          firstName: String(urows[0].full_name || "").split(/\s+/)[0] || null,
+        });
+      }
+    } catch (mailErr) {
+      console.error("[KYC] digilocker submitted email failed:", mailErr.code || mailErr.message);
+    }
 
     return res.status(201).json({
       success: true,

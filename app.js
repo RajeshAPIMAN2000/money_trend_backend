@@ -7,6 +7,7 @@ require("dotenv").config();
 const { resolveUploadsDir } = require("./config/uploadsPath");
 const { ensureCoreTables } = require("./config/db_init");
 const { startRateSyncScheduler } = require("./services/fdRdRateService");
+const { validateEmailEnv } = require("./services/email/emailConfig");
 const { swaggerSpec } = require("./config/swagger");
 const swaggerUi = require("swagger-ui-express");
 
@@ -23,6 +24,10 @@ const homeRoutes = require("./routes/home");
 const articlesRoutes = require("./routes/articles");
 const bannersRoutes = require("./routes/banners");
 const supportRoutes = require("./routes/support");
+const equifaxRoutes = require("./routes/equifax");
+const paymentsRoutes = require("./routes/payments");
+const seoRoutes = require("./routes/seo");
+const { serveSitemap, serveRobots } = require("./controllers/seoController");
 
 const app = express();
 
@@ -58,6 +63,9 @@ function mountApiRoutes(basePath = "") {
   app.use(route("/articles"), articlesRoutes);
   app.use(route("/banners"), bannersRoutes);
   app.use(route("/support"), supportRoutes);
+  app.use(route("/equifax"), equifaxRoutes);
+  app.use(route("/payments"), paymentsRoutes);
+  app.use(route("/seo"), seoRoutes);
   app.get(route("/health"), (_req, res) => {
     res.json(healthPayload());
   });
@@ -164,6 +172,12 @@ app.get("/health", (_req, res) => {
   res.json(healthPayload());
 });
 
+// Root SEO files (Google / crawlers expect these at site root on API host too)
+app.get("/sitemap.xml", serveSitemap);
+app.get("/robots.txt", serveRobots);
+app.get("/api/sitemap.xml", serveSitemap);
+app.get("/api/robots.txt", serveRobots);
+
 // Standard paths used by Vite proxy and direct Node access.
 mountApiRoutes("/api");
 // cPanel/LiteSpeed often forwards /api/* with the prefix stripped.
@@ -203,6 +217,7 @@ const host = process.env.HOST || "0.0.0.0";
 
 async function startServer() {
   try {
+    validateEmailEnv({ exitOnError: true });
     await ensureCoreTables();
     startRateSyncScheduler();
     app.listen(port, host, () => {

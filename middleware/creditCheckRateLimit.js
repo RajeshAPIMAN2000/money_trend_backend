@@ -1,11 +1,16 @@
 const {
   hasRecentCheck,
   hasRecentCheckByPhone,
-  RATE_LIMIT_HOURS,
+  getCreditCheckRateLimitHours,
 } = require("../services/creditCheckService");
 
 async function creditCheckRateLimit(req, res, next) {
   try {
+    const hours = getCreditCheckRateLimitHours();
+    if (hours <= 0) {
+      return next();
+    }
+
     const userId = Number(
       req.body?.userId || req.body?.user_id || req.params?.userId || req.user?.id
     );
@@ -19,7 +24,9 @@ async function creditCheckRateLimit(req, res, next) {
       if (recent) {
         return res.status(429).json({
           success: false,
-          message: `Credit check for ${bureau} already performed within the last ${RATE_LIMIT_HOURS} hours`,
+          message: `Credit check for ${bureau} already performed within the last ${hours} hours`,
+          errorCode: "BUREAU_RATE_LIMITED",
+          retryAfterHours: hours,
         });
       }
       return next();
@@ -30,7 +37,9 @@ async function creditCheckRateLimit(req, res, next) {
       if (recent) {
         return res.status(429).json({
           success: false,
-          message: `Credit check for ${bureau} already performed within the last ${RATE_LIMIT_HOURS} hours`,
+          message: `Credit check for ${bureau} already performed within the last ${hours} hours`,
+          errorCode: "BUREAU_RATE_LIMITED",
+          retryAfterHours: hours,
         });
       }
     }
