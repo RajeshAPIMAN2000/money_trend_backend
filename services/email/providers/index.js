@@ -19,7 +19,7 @@ function getEmailProvider() {
   return cached;
 }
 
-/** Reset cache — used in tests */
+/** Reset cache — used in tests / after env reload */
 function resetEmailProviderCache() {
   cached = null;
 }

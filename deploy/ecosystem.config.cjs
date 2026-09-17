@@ -18,6 +18,8 @@ module.exports = {
       merge_logs: true,
       autorestart: true,
       watch: false,
+      // App loads secrets from /var/www/moneytrend/backend/.env via config/loadEnv.js
+      // Do NOT put SMTP_PASS here — keep it only in .env
     },
   ],
 };

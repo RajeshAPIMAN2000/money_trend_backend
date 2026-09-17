@@ -47,8 +47,42 @@ Backend env:
 
 ```bash
 cp /var/www/moneytrend/backend/deploy/env.production.example /var/www/moneytrend/backend/.env
-nano /var/www/moneytrend/backend/.env   # set DB, JWT, CORS, Razorpay, SMS
+nano /var/www/moneytrend/backend/.env   # set DB, JWT, CORS, EMAIL/SMTP, Razorpay, SMS
+node /var/www/moneytrend/backend/deploy/check-env.js
 ```
+
+### Email on Hostinger (fixes sandbox OTP issue)
+
+Production **blocks sandbox email**. OTP will not arrive until SMTP is set.
+
+1. In **hPanel → Emails → Email Accounts**, create `info@yourdomain.com` (or use existing).
+2. Put this in VPS `.env` (mailbox password, not hPanel password):
+
+```env
+NODE_ENV=production
+EMAIL_PROVIDER=smtp
+MAIL_FROM_EMAIL=info@yourdomain.com
+SMTP_HOST=smtp.hostinger.com
+SMTP_PORT=465
+SMTP_SECURE=true
+SMTP_USER=info@yourdomain.com
+SMTP_PASS=YOUR_MAILBOX_PASSWORD
+PUBLIC_BASE_URL=https://yourdomain.com
+```
+
+3. Test from VPS:
+
+```bash
+cd /var/www/moneytrend/backend
+npm run test:smtp -- you@gmail.com
+# or: node scripts/test-smtp.js you@gmail.com
+pm2 restart moneytrend-api
+curl -s https://yourdomain.com/api/health | jq .email
+```
+
+Health must show `"provider":"smtp"` and `"sandbox":false`.
+
+If MX still points to **GoDaddy**, use `SMTP_HOST=smtpout.secureserver.net` instead (same mailbox password).
 
 Frontend env (build time):
 

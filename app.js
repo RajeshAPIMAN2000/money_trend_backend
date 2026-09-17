@@ -2,12 +2,14 @@ const express = require("express");
 const cors = require("cors");
 const cookieParser = require("cookie-parser");
 const fs = require("fs");
-require("dotenv").config();
+const { loadEnv } = require("./config/loadEnv");
+loadEnv();
 
 const { resolveUploadsDir } = require("./config/uploadsPath");
 const { ensureCoreTables } = require("./config/db_init");
 const { startRateSyncScheduler } = require("./services/fdRdRateService");
-const { validateEmailEnv } = require("./services/email/emailConfig");
+const { validateEmailEnv, getEmailHealthSnapshot } = require("./services/email/emailConfig");
+const { getEmailProvider } = require("./services/email/providers");
 const { swaggerSpec } = require("./config/swagger");
 const swaggerUi = require("swagger-ui-express");
 
@@ -43,7 +45,12 @@ function parseFrontendOrigins() {
 }
 
 function healthPayload() {
-  return { success: true, message: "Money Trend backend is running" };
+  return {
+    success: true,
+    message: "Money Trend backend is running",
+    env: process.env.NODE_ENV || "development",
+    email: getEmailHealthSnapshot(),
+  };
 }
 
 function mountApiRoutes(basePath = "") {
@@ -218,6 +225,27 @@ const host = process.env.HOST || "0.0.0.0";
 async function startServer() {
   try {
     validateEmailEnv({ exitOnError: true });
+
+    // Non-blocking SMTP check so Hostinger misconfig shows clearly in PM2 logs
+    try {
+      const provider = getEmailProvider();
+      if (provider.name === "smtp" && typeof provider.verify === "function") {
+        await provider.verify();
+        console.log("[EMAIL] SMTP connection verified");
+      } else if (provider.name === "sandbox") {
+        console.warn(
+          "[EMAIL] Using sandbox provider — emails are NOT delivered. Configure SMTP on the VPS."
+        );
+      }
+    } catch (smtpErr) {
+      console.error("[EMAIL] SMTP verify failed at startup:", smtpErr.message);
+      if (String(process.env.NODE_ENV || "").toLowerCase() === "production") {
+        console.error(
+          "[EMAIL] Fix SMTP_* in /var/www/moneytrend/backend/.env then: pm2 restart moneytrend-api"
+        );
+      }
+    }
+
     await ensureCoreTables();
     startRateSyncScheduler();
     app.listen(port, host, () => {
