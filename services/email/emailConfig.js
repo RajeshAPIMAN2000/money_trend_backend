@@ -12,6 +12,23 @@ function isProduction() {
   return String(process.env.NODE_ENV || "").toLowerCase() === "production";
 }
 
+function smtpCredentialStatus() {
+  const host = trim(process.env.SMTP_HOST);
+  const user = trim(process.env.SMTP_USER);
+  const pass = trim(process.env.SMTP_PASS || process.env.SMTP_PASSWORD);
+  const missing = [];
+  if (!host) missing.push("SMTP_HOST");
+  if (!user) missing.push("SMTP_USER");
+  if (!pass) missing.push("SMTP_PASS");
+  return {
+    host,
+    user,
+    hasPass: Boolean(pass),
+    missing,
+    complete: missing.length === 0,
+  };
+}
+
 function getEmailConfig() {
   const fromEmail = trim(
     process.env.MAIL_FROM_EMAIL || process.env.SUPPORT_EMAIL || "info@moneytrend.in"
@@ -28,11 +45,8 @@ function getEmailConfig() {
 
   const providerRaw = trim(process.env.EMAIL_PROVIDER || "").toLowerCase();
   const hasResend = Boolean(trim(process.env.RESEND_API_KEY));
-  const hasSmtp = Boolean(
-    trim(process.env.SMTP_HOST) &&
-      trim(process.env.SMTP_USER) &&
-      trim(process.env.SMTP_PASS || process.env.SMTP_PASSWORD)
-  );
+  const smtpStatus = smtpCredentialStatus();
+  const hasSmtp = smtpStatus.complete;
 
   let resolvedProvider = providerRaw;
   if (!resolvedProvider) {
@@ -52,11 +66,13 @@ function getEmailConfig() {
     else if (hasResend) resolvedProvider = "resend";
   }
 
-  // Local/dev soft fallback only
+  // Local/dev soft fallback only when SMTP was never intended
   if (!isProduction() && resolvedProvider === "resend" && !hasResend) {
     resolvedProvider = hasSmtp ? "smtp" : "sandbox";
   }
-  if (!isProduction() && resolvedProvider === "smtp" && !hasSmtp) {
+  // If EMAIL_PROVIDER=smtp but credentials incomplete: keep "smtp" so validation fails clearly
+  // (do NOT silently switch to sandbox when host is already set)
+  if (!isProduction() && resolvedProvider === "smtp" && !hasSmtp && !smtpStatus.host) {
     resolvedProvider = "sandbox";
   }
 
@@ -84,8 +100,9 @@ function getEmailConfig() {
     otpIpWindowMinutes: Number(process.env.OTP_IP_WINDOW_MINUTES || 15),
     hasResend,
     hasSmtp,
-    smtpHost: trim(process.env.SMTP_HOST),
+    smtpHost: smtpStatus.host,
     smtpPort: Number(process.env.SMTP_PORT || 465),
+    smtpMissing: smtpStatus.missing,
     isProduction: isProduction(),
   };
 }
@@ -101,9 +118,16 @@ function validateEmailEnv({ exitOnError = false } = {}) {
   if (!cfg.fromEmail.includes("@")) {
     issues.push("MAIL_FROM_EMAIL must be a valid email (e.g. info@moneytrend.in)");
   }
+
+  if (cfg.smtpMissing.length && (cfg.provider === "smtp" || cfg.isProduction || cfg.smtpHost)) {
+    issues.push(
+      `SMTP incomplete — missing ${cfg.smtpMissing.join(", ")}. Example: SMTP_USER=info@domain.com SMTP_PASS=mailbox_password SMTP_HOST=smtp.hostinger.com`
+    );
+  }
+
   if (cfg.isProduction && cfg.provider === "sandbox") {
     issues.push(
-      "Production forbids EMAIL_PROVIDER=sandbox. Set Hostinger SMTP: SMTP_HOST=smtp.hostinger.com SMTP_USER SMTP_PASS EMAIL_PROVIDER=smtp"
+      "Production forbids sandbox email. Set EMAIL_PROVIDER=smtp and complete SMTP_HOST/SMTP_USER/SMTP_PASS"
     );
   }
   if (cfg.provider === "resend" && !cfg.hasResend) {
@@ -111,23 +135,30 @@ function validateEmailEnv({ exitOnError = false } = {}) {
   }
   if (cfg.provider === "smtp" && !cfg.hasSmtp) {
     issues.push(
-      "EMAIL_PROVIDER=smtp but SMTP_HOST / SMTP_USER / SMTP_PASS are incomplete (use Hostinger mailbox password)"
+      "EMAIL_PROVIDER=smtp but SMTP credentials incomplete (check SMTP_PASS is set and not empty)"
     );
   }
   if (cfg.isProduction && !cfg.logoUrl && !cfg.publicBaseUrl) {
     issues.push("Set MAIL_LOGO_URL or PUBLIC_BASE_URL so OTP emails can load the MoneyTrend logo");
   }
-  if (cfg.isProduction && cfg.provider === "smtp" && !cfg.smtpHost) {
-    issues.push("SMTP_HOST is required on Hostinger VPS (smtp.hostinger.com or smtpout.secureserver.net)");
-  }
+
+  const hardFail =
+    exitOnError &&
+    (cfg.isProduction || cfg.provider === "smtp" || Boolean(cfg.smtpHost));
 
   if (issues.length) {
     const message = `[EMAIL_CONFIG] ${issues.join("; ")}`;
-    if (exitOnError && cfg.isProduction) {
-      console.error(message);
-      process.exit(1);
+    if (hardFail && (cfg.isProduction || !cfg.hasSmtp)) {
+      // On VPS / when SMTP intended: stop startup so OTP does not silently sandbox
+      if (cfg.isProduction || (cfg.provider === "smtp" && !cfg.hasSmtp)) {
+        console.error(message);
+        if (exitOnError) process.exit(1);
+      } else {
+        console.warn(message);
+      }
+    } else {
+      console.warn(message);
     }
-    console.warn(message);
   } else {
     console.log(
       `[EMAIL_CONFIG] provider=${cfg.provider} from=${cfg.fromEmail} smtp=${cfg.smtpHost || "n/a"}:${cfg.smtpPort || "-"} logo=${cfg.logoUrl ? "configured" : "fallback-text"}`
@@ -144,9 +175,12 @@ function getEmailHealthSnapshot() {
     provider: cfg.provider,
     from: cfg.fromEmail,
     smtp_configured: cfg.hasSmtp,
-    smtp_host: cfg.provider === "smtp" ? cfg.smtpHost : null,
+    smtp_host: cfg.smtpHost || null,
+    smtp_missing: cfg.smtpMissing || [],
     sandbox: cfg.provider === "sandbox",
-    production_ready: cfg.isProduction ? cfg.provider !== "sandbox" && (cfg.hasSmtp || cfg.hasResend) : null,
+    production_ready: cfg.isProduction
+      ? cfg.provider !== "sandbox" && (cfg.hasSmtp || cfg.hasResend)
+      : null,
   };
 }
 
@@ -155,4 +189,5 @@ module.exports = {
   validateEmailEnv,
   getEmailHealthSnapshot,
   isProduction,
+  smtpCredentialStatus,
 };

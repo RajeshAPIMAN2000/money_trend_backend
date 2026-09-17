@@ -226,6 +226,33 @@ async function startServer() {
   try {
     validateEmailEnv({ exitOnError: true });
 
+    const { assertDbConfig, pingDatabase, getDbConfig } = require("./config/db");
+    try {
+      const dbCfg = assertDbConfig();
+      console.log(
+        `[DB] connecting host=${dbCfg.host} user=${dbCfg.user} database=${dbCfg.database}`
+      );
+      await pingDatabase();
+      console.log("[DB] connection OK");
+    } catch (dbErr) {
+      console.error("[DB] FAILED:", dbErr.message);
+      if (/Access denied/i.test(dbErr.message)) {
+        console.error(
+          "[DB] Fix: edit .env — set DB_USER / DB_PASSWORD to a MySQL user that exists."
+        );
+        console.error(
+          "[DB] On Hostinger VPS do NOT use root with empty password. Example:"
+        );
+        console.error("  sudo mysql");
+        console.error("  CREATE DATABASE money_trend CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;");
+        console.error("  CREATE USER 'moneytrend'@'localhost' IDENTIFIED BY 'StrongPasswordHere';");
+        console.error("  GRANT ALL PRIVILEGES ON money_trend.* TO 'moneytrend'@'localhost';");
+        console.error("  FLUSH PRIVILEGES;");
+        console.error("Then in .env: DB_USER=moneytrend  DB_PASSWORD=StrongPasswordHere  DB_HOST=127.0.0.1");
+      }
+      process.exit(1);
+    }
+
     // Non-blocking SMTP check so Hostinger misconfig shows clearly in PM2 logs
     try {
       const provider = getEmailProvider();
@@ -243,6 +270,7 @@ async function startServer() {
         console.error(
           "[EMAIL] Fix SMTP_* in /var/www/moneytrend/backend/.env then: pm2 restart moneytrend-api"
         );
+        process.exit(1);
       }
     }
 
