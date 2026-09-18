@@ -2,10 +2,12 @@ const {
   listPublished,
   getPublishedById,
   listAdmin,
+  listDistinctCategories,
   getAdminById,
   createArticle,
   updateArticle,
   deleteArticle,
+  ARTICLE_CATEGORIES,
 } = require("../services/articleService");
 
 function getClientIp(req) {
@@ -30,8 +32,15 @@ function handleError(res, error, fallback) {
   if (error.code === "VALIDATION_ERROR") {
     return res.status(400).json({ success: false, message: error.message, error: error.details });
   }
+  if (error.code === "STALE_ADMIN_SESSION") {
+    return res.status(401).json({
+      success: false,
+      message: error.message,
+      code: "STALE_ADMIN_SESSION",
+    });
+  }
   console.error(fallback, error.message);
-  return res.status(500).json({ success: false, message: fallback });
+  return res.status(500).json({ success: false, message: fallback, error: error.message });
 }
 
 // ——— Public (no login) ———
@@ -41,6 +50,7 @@ async function listBlogs(req, res) {
     const data = await listPublished("blog", {
       limit: req.query.limit,
       offset: req.query.offset,
+      category: req.query.category,
     });
     return res.json({ success: true, message: "Blogs fetched", data });
   } catch (error) {
@@ -63,6 +73,7 @@ async function listNews(req, res) {
     const data = await listPublished("news", {
       limit: req.query.limit,
       offset: req.query.offset,
+      category: req.query.category,
     });
     return res.json({ success: true, message: "News fetched", data });
   } catch (error) {
@@ -80,11 +91,27 @@ async function getNewsById(req, res) {
   }
 }
 
+async function listArticleCategories(req, res) {
+  try {
+    const type = req.query.type || null;
+    const categories = await listDistinctCategories(type);
+    return res.json({
+      success: true,
+      data: { categories, defaults: ARTICLE_CATEGORIES },
+    });
+  } catch (error) {
+    return handleError(res, error, "Failed to list categories");
+  }
+}
+
 // ——— Admin ———
 
 async function adminListBlogs(req, res) {
   try {
-    const data = await listAdmin("blog", { status: req.query.status });
+    const data = await listAdmin("blog", {
+      status: req.query.status,
+      category: req.query.category,
+    });
     return res.json({ success: true, data });
   } catch (error) {
     return handleError(res, error, "Failed to list blogs");
@@ -104,6 +131,7 @@ async function adminGetBlog(req, res) {
 async function adminCreateBlog(req, res) {
   try {
     const body = { ...req.body, image: pickImageFile(req) };
+    console.log("[BLOG] create body keys:", Object.keys(req.body || {}), "category:", req.body?.category);
     const data = await createArticle("blog", body, req.user.id, { ip: getClientIp(req) });
     return res.status(201).json({ success: true, message: "Blog created", data });
   } catch (error) {
@@ -138,7 +166,10 @@ async function adminDeleteBlog(req, res) {
 
 async function adminListNews(req, res) {
   try {
-    const data = await listAdmin("news", { status: req.query.status });
+    const data = await listAdmin("news", {
+      status: req.query.status,
+      category: req.query.category,
+    });
     return res.json({ success: true, data });
   } catch (error) {
     return handleError(res, error, "Failed to list news");
@@ -158,6 +189,7 @@ async function adminGetNews(req, res) {
 async function adminCreateNews(req, res) {
   try {
     const body = { ...req.body, image: pickImageFile(req) };
+    console.log("[NEWS] create body keys:", Object.keys(req.body || {}), "category:", req.body?.category);
     const data = await createArticle("news", body, req.user.id, { ip: getClientIp(req) });
     return res.status(201).json({ success: true, message: "News created", data });
   } catch (error) {
@@ -195,6 +227,7 @@ module.exports = {
   getBlogById,
   listNews,
   getNewsById,
+  listArticleCategories,
   adminListBlogs,
   adminGetBlog,
   adminCreateBlog,

@@ -71,6 +71,7 @@ const {
   adminCreateNews,
   adminUpdateNews,
   adminDeleteNews,
+  listArticleCategories,
 } = require("../controllers/articleController");
 const {
   adminListBanners,
@@ -110,6 +111,7 @@ router.put("/seo/pages/:id", requirePermission("seo"), adminUpsertSeoPage);
 router.delete("/seo/pages/:id", requirePermission("seo"), adminDeleteSeoPage);
 
 // ----- Blog Management -----
+router.get("/article-categories", requirePermission("blog"), listArticleCategories);
 router.get("/blogs", requirePermission("blog"), adminListBlogs);
 router.get("/blogs/:id", requirePermission("blog"), adminGetBlog);
 router.post("/blogs", requirePermission("blog"), upload.single("image"), adminCreateBlog);

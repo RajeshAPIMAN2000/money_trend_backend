@@ -584,6 +584,7 @@ async function ensureCoreTables() {
       type ENUM('blog','news') NOT NULL,
       heading VARCHAR(255) NOT NULL,
       description TEXT NOT NULL,
+      category VARCHAR(100) NULL,
       image VARCHAR(500) NULL,
       status ENUM('draft','published') NOT NULL DEFAULT 'published',
       created_by INT UNSIGNED NULL,
@@ -595,6 +596,8 @@ async function ensureCoreTables() {
       CONSTRAINT fk_articles_admin FOREIGN KEY (created_by) REFERENCES users (id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
+
+  await addColumnIfMissing(pool, "articles", "category", "category VARCHAR(100) NULL AFTER description");
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS banners (
@@ -774,36 +777,112 @@ async function ensureCoreTables() {
     console.warn("[DB] SEO seed skipped:", err.message);
   }
 
-  await ensureDefaultAdmin(pool);
+  await ensureSuperAdmins(pool);
 }
 
-async function ensureDefaultAdmin(pool) {
+/**
+ * Seed / sync the two Super Admins (replaces legacy admin@moneytrend.in).
+ */
+async function ensureSuperAdmins(pool) {
   const bcrypt = require("bcryptjs");
-  const adminEmail = process.env.ADMIN_EMAIL || "admin@moneytrend.in";
-  const adminPassword = process.env.ADMIN_PASSWORD || "Admin@123";
-  const adminPhone = process.env.ADMIN_PHONE || "9999999999";
 
-  const [existing] = await pool.query(
-    `SELECT id FROM users WHERE email = :email OR role = 'admin' LIMIT 1`,
-    { email: adminEmail }
-  );
+  const admins = [
+    {
+      fullName: "Rudrapratap Routray",
+      email: String(process.env.SUPER_ADMIN_1_EMAIL || "rudraraay@gmail.com").toLowerCase(),
+      // Do NOT fall back to ADMIN_PASSWORD — that was overwriting the intended Super Admin password
+      password: process.env.SUPER_ADMIN_1_PASSWORD || "Moneytrend@2026#",
+      phone: process.env.SUPER_ADMIN_1_PHONE || process.env.ADMIN_PHONE || "9876500001",
+    },
+    {
+      fullName: "Manoj Kumar Rout",
+      email: String(process.env.SUPER_ADMIN_2_EMAIL || "manojrout2019@gmail.com").toLowerCase(),
+      password: process.env.SUPER_ADMIN_2_PASSWORD || "Money8908@",
+      phone: process.env.SUPER_ADMIN_2_PHONE || "9876500002",
+    },
+  ];
 
-  if (existing.length) {
-    await pool.query(`UPDATE users SET role = 'admin' WHERE id = :id`, { id: existing[0].id });
-    return;
+  const keepEmails = new Set(admins.map((a) => a.email));
+  const legacyEmails = ["admin@moneytrend.in"].filter((e) => !keepEmails.has(e));
+
+  for (const legacy of legacyEmails) {
+    try {
+      const [gone] = await pool.query(`SELECT id FROM users WHERE email = :email LIMIT 1`, {
+        email: legacy,
+      });
+      if (gone.length) {
+        await pool.query(`DELETE FROM users WHERE id = :id`, { id: gone[0].id });
+        console.log(`[DB] Removed legacy admin account: ${legacy}`);
+      }
+    } catch (err) {
+      console.warn(`[DB] Could not remove legacy admin ${legacy}:`, err.message);
+      await pool.query(`UPDATE users SET role = 'user', staff_active = 0 WHERE email = :email`, {
+        email: legacy,
+      });
+    }
   }
 
-  const passwordHash = await bcrypt.hash(adminPassword, 10);
-  await pool.query(
-    `INSERT INTO users (full_name, email, password_hash, phone, role, kyc_status)
-     VALUES (:fullName, :email, :passwordHash, :phone, 'admin', 'verified')`,
-    {
-      fullName: "Money Trend Admin",
-      email: adminEmail,
-      passwordHash,
-      phone: adminPhone,
+  for (const admin of admins) {
+    const passwordHash = await bcrypt.hash(admin.password, 10);
+    const [existing] = await pool.query(`SELECT id FROM users WHERE email = :email LIMIT 1`, {
+      email: admin.email,
+    });
+
+    if (existing.length) {
+      await pool.query(
+        `UPDATE users
+         SET full_name = :fullName,
+             password_hash = :passwordHash,
+             role = 'admin',
+             kyc_status = 'verified',
+             staff_active = 1,
+             email_verified_at = COALESCE(email_verified_at, NOW())
+         WHERE id = :id`,
+        {
+          id: existing[0].id,
+          fullName: admin.fullName,
+          passwordHash,
+        }
+      );
+      console.log(`[DB] Super admin synced: ${admin.email}`);
+      continue;
     }
-  );
+
+    try {
+      await pool.query(
+        `INSERT INTO users
+          (full_name, email, password_hash, phone, role, kyc_status, staff_active, email_verified_at)
+         VALUES
+          (:fullName, :email, :passwordHash, :phone, 'admin', 'verified', 1, NOW())`,
+        {
+          fullName: admin.fullName,
+          email: admin.email,
+          passwordHash,
+          phone: admin.phone,
+        }
+      );
+      console.log(`[DB] Super admin created: ${admin.email}`);
+    } catch (err) {
+      if (err.code === "ER_DUP_ENTRY" || /Duplicate/i.test(err.message)) {
+        const altPhone = `9${String(Date.now()).slice(-9)}`;
+        await pool.query(
+          `INSERT INTO users
+            (full_name, email, password_hash, phone, role, kyc_status, staff_active, email_verified_at)
+           VALUES
+            (:fullName, :email, :passwordHash, :phone, 'admin', 'verified', 1, NOW())`,
+          {
+            fullName: admin.fullName,
+            email: admin.email,
+            passwordHash,
+            phone: altPhone,
+          }
+        );
+        console.log(`[DB] Super admin created: ${admin.email} (alt phone ${altPhone})`);
+      } else {
+        throw err;
+      }
+    }
+  }
 }
 
 module.exports = { ensureCoreTables };

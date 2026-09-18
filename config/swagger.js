@@ -1036,8 +1036,8 @@ const options = {
                 schema: {
                   type: "object",
                   properties: {
-                    email: { type: "string", example: "admin@moneytrend.in" },
-                    password: { type: "string", example: "Admin@123" },
+                    email: { type: "string", example: "rudraraay@gmail.com" },
+                    password: { type: "string", example: "Moneytrend@2026#" },
                   },
                 },
               },

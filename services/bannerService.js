@@ -104,6 +104,18 @@ async function createBanner(body, adminUserId, reqMeta = {}) {
     throw err;
   }
 
+  let createdBy = adminUserId != null && adminUserId !== "" ? Number(adminUserId) : null;
+  if (!Number.isFinite(createdBy) || createdBy <= 0) createdBy = null;
+  if (createdBy) {
+    const [users] = await pool.query(`SELECT id FROM users WHERE id = :id LIMIT 1`, {
+      id: createdBy,
+    });
+    if (!users.length) {
+      console.warn("[BANNER] created_by user missing; inserting with NULL", { createdBy });
+      createdBy = null;
+    }
+  }
+
   const [result] = await pool.query(
     `INSERT INTO banners (title, description, image, created_by)
      VALUES (:title, :description, :image, :createdBy)`,
@@ -111,12 +123,12 @@ async function createBanner(body, adminUserId, reqMeta = {}) {
       title: validation.data.title,
       description: validation.data.description,
       image: validation.data.image,
-      createdBy: adminUserId,
+      createdBy,
     }
   );
 
   await writeAuditLog({
-    userId: adminUserId,
+    userId: createdBy,
     action: "BANNER_CREATED",
     entityType: "banner",
     entityId: result.insertId,

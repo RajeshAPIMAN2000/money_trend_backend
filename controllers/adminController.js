@@ -42,7 +42,7 @@ function issueAdminTokens(staff, res) {
       : parsePermissionsJson(staff.staff_permissions);
 
   const payload = {
-    sub: staff.id,
+    sub: Number(staff.id),
     email: staff.email,
     role: staff.role,
     permissions,
@@ -123,14 +123,36 @@ async function adminLogin(req, res) {
       });
     }
 
-    const [rows] = await pool.query(
-      `SELECT id, full_name, email, phone, password_hash, role, staff_permissions, staff_active
-       FROM users WHERE email = :email LIMIT 1`,
-      { email }
-    );
+    let rows;
+    try {
+      const result = await pool.query(
+        `SELECT id, full_name, email, phone, password_hash, role, staff_permissions, staff_active
+         FROM users WHERE email = :email LIMIT 1`,
+        { email }
+      );
+      rows = result[0];
+    } catch (colErr) {
+      // Older DBs may lack staff_* columns
+      console.warn("[ADMIN] login falling back without staff columns:", colErr.message);
+      const result = await pool.query(
+        `SELECT id, full_name, email, phone, password_hash, role
+         FROM users WHERE email = :email LIMIT 1`,
+        { email }
+      );
+      rows = result[0];
+      if (rows.length) {
+        rows[0].staff_permissions = null;
+        rows[0].staff_active = 1;
+      }
+    }
 
     if (!rows.length || !["admin", "sub_admin"].includes(rows[0].role)) {
-      return res.status(401).json({ success: false, message: "Invalid admin credentials" });
+      console.warn("[ADMIN] login rejected: not found or not staff", { email });
+      return res.status(401).json({
+        success: false,
+        message: "Invalid admin credentials",
+        hint: "Use rudraraay@gmail.com or manojrout2019@gmail.com (Super Admin)",
+      });
     }
 
     const staff = rows[0];
@@ -144,11 +166,19 @@ async function adminLogin(req, res) {
 
     const matched = await bcrypt.compare(password, staff.password_hash);
     if (!matched) {
-      return res.status(401).json({ success: false, message: "Invalid admin credentials" });
+      console.warn("[ADMIN] login rejected: bad password", { email, id: staff.id });
+      return res.status(401).json({
+        success: false,
+        message: "Invalid admin credentials",
+      });
     }
 
     const tokens = issueAdminTokens(staff, res);
-    await storeRefreshToken(staff.id, tokens.refreshToken);
+    try {
+      await storeRefreshToken(staff.id, tokens.refreshToken);
+    } catch (rtErr) {
+      console.warn("[ADMIN] refresh token store failed (continuing):", rtErr.message);
+    }
 
     await writeAuditLog({
       userId: staff.id,
@@ -158,6 +188,8 @@ async function adminLogin(req, res) {
       ipAddress: req.ip,
       userAgent: req.headers["user-agent"],
     });
+
+    console.log("[ADMIN] login OK", { id: staff.id, email: staff.email, role: staff.role });
 
     return res.json({
       success: true,
@@ -174,6 +206,10 @@ async function adminLogin(req, res) {
         },
         accessToken: tokens.accessToken,
         refreshToken: tokens.refreshToken,
+        // aliases for older frontend clients
+        token: tokens.accessToken,
+        access_token: tokens.accessToken,
+        refresh_token: tokens.refreshToken,
       },
     });
   } catch (error) {
