@@ -11,7 +11,7 @@ const {
   assertRecentVerifiedEmailOtp,
   normalizeEmail,
 } = require("../services/emailOtpService");
-const { sendKycReminderEmail } = require("../services/emailService");
+const { sendKycReminderEmail, sendWelcomeEmail } = require("../services/emailService");
 
 function handleEmailOtpError(res, error, fallbackMessage) {
   const status =
@@ -446,6 +446,17 @@ async function register(req, res) {
       await ensureWallet(user.id);
     } catch (walletErr) {
       console.error("[AUTH] wallet create on register:", walletErr.message);
+    }
+
+    try {
+      await sendWelcomeEmail({
+        to: email,
+        firstName: fullName.split(/\s+/)[0] || fullName,
+        email,
+        registeredAt: new Date(),
+      });
+    } catch (mailErr) {
+      console.error("[AUTH] welcome email failed:", mailErr.code || mailErr.message);
     }
 
     try {

@@ -3,7 +3,9 @@ const fs = require("fs");
 const { resolveUploadsDir } = require("../config/uploadsPath");
 const { getEmailConfig } = require("./email/emailConfig");
 const { getEmailProvider } = require("./email/providers");
+const { buildBrandAttachments } = require("./email/templates/layout");
 const { buildOtpEmail } = require("./email/templates/otpEmail");
+const { buildWelcomeEmail } = require("./email/templates/welcomeEmail");
 const {
   buildKycVerifiedEmail,
   buildKycRejectedEmail,
@@ -13,7 +15,7 @@ const {
 const { maskEmail, hashEmailForLog } = require("../utils/otpCrypto");
 
 function supportInbox() {
-  return getEmailConfig().supportEmail;
+  return getEmailConfig().supportEmail || "info@moneytrend.in";
 }
 
 function absoluteAttachmentPath(relativeOrName) {
@@ -21,6 +23,16 @@ function absoluteAttachmentPath(relativeOrName) {
   const name = String(relativeOrName).replace(/^\/?uploads\//, "");
   const full = path.join(resolveUploadsDir(), path.basename(name));
   return fs.existsSync(full) ? full : null;
+}
+
+function withBrandAssets(attachments = []) {
+  const list = Array.isArray(attachments) ? [...attachments] : [];
+  for (const asset of buildBrandAttachments()) {
+    if (!list.some((a) => a.cid === asset.cid || a.filename === asset.filename)) {
+      list.unshift(asset);
+    }
+  }
+  return list.length ? list : undefined;
 }
 
 function logEmailEvent({ emailType, to, result, error }) {
@@ -43,6 +55,7 @@ function logEmailEvent({ emailType, to, result, error }) {
 
 /**
  * Provider-agnostic send. Controllers must not call Resend/SMTP directly.
+ * Always embeds Money Trend logo via CID so it shows in the template.
  */
 async function sendEmail({
   to,
@@ -63,8 +76,8 @@ async function sendEmail({
       subject,
       html,
       text,
-      replyTo: replyTo || cfg.replyTo,
-      attachments,
+      replyTo: replyTo || cfg.replyTo || "info@moneytrend.in",
+      attachments: withBrandAssets(attachments),
       emailType,
     });
     logEmailEvent({ emailType, to, result });
@@ -86,6 +99,21 @@ async function sendOtpEmail({ to, firstName, otp, purpose, expiresMinutes }) {
     html: content.html,
     text: content.text,
     emailType: `otp_${String(purpose || "EMAIL_VERIFICATION").toLowerCase()}`,
+  });
+}
+
+async function sendWelcomeEmail({ to, firstName, email, registeredAt }) {
+  const content = buildWelcomeEmail({
+    firstName,
+    email: email || to,
+    registeredAt,
+  });
+  return sendEmail({
+    to,
+    subject: content.subject,
+    html: content.html,
+    text: content.text,
+    emailType: "welcome",
   });
 }
 
@@ -127,14 +155,21 @@ async function sendSupportTicketEmail({ ticket, user, attachmentPath }) {
     attachmentPath ? `Attachment: ${attachmentPath}` : `Attachment: none`,
   ].join("\n");
 
-  const html = `
-    <h2>New support ticket #${ticket.id}</h2>
-    <p><strong>Status:</strong> ${ticket.status}</p>
-    <p><strong>Subject:</strong> ${String(ticket.subject || "").replace(/</g, "&lt;")}</p>
-    <p><strong>User:</strong> ${String(user?.full_name || "N/A").replace(/</g, "&lt;")} &lt;${String(user?.email || "N/A").replace(/</g, "&lt;")}&gt;</p>
-    <p><strong>Phone:</strong> ${String(user?.phone || "N/A").replace(/</g, "&lt;")}</p>
-    <hr/>
-    <p style="white-space:pre-wrap">${String(ticket.description || "").replace(/</g, "&lt;")}</p>
+  const { renderEmailLayout, BRAND, escapeHtml } = require("./email/templates/layout");
+  const bodyHtml = `
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:${BRAND.cream};">
+      <tr>
+        <td style="padding:28px;font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:${BRAND.text};">
+          <h2 style="margin:0 0 12px;font-family:Georgia,Times,serif;color:${BRAND.green};">New support ticket #${ticket.id}</h2>
+          <p><strong>Status:</strong> ${escapeHtml(ticket.status)}</p>
+          <p><strong>Subject:</strong> ${escapeHtml(ticket.subject)}</p>
+          <p><strong>User:</strong> ${escapeHtml(user?.full_name || "N/A")} &lt;${escapeHtml(user?.email || "N/A")}&gt;</p>
+          <p><strong>Phone:</strong> ${escapeHtml(user?.phone || "N/A")}</p>
+          <hr style="border:none;border-top:1px solid #E6D7B0;margin:16px 0;" />
+          <p style="white-space:pre-wrap">${escapeHtml(ticket.description || "")}</p>
+        </td>
+      </tr>
+    </table>
   `;
 
   const attachments = [];
@@ -146,7 +181,11 @@ async function sendSupportTicketEmail({ ticket, user, attachmentPath }) {
   return sendEmail({
     to,
     subject,
-    html,
+    html: renderEmailLayout({
+      title: subject,
+      preheader: `Support ticket #${ticket.id}`,
+      bodyHtml,
+    }),
     text,
     replyTo: user?.email || undefined,
     attachments: attachments.length ? attachments : undefined,
@@ -164,21 +203,39 @@ async function sendSupportStatusEmail({ ticket, user }) {
         ? "Fixed"
         : "Pending";
 
-  const subject = `[MoneyTrend] Ticket #${ticket.id} is now ${statusLabel}`;
+  const subject = `[Money Trend] Ticket #${ticket.id} is now ${statusLabel}`;
   const text = [
     `Hi ${user.full_name || "there"},`,
     ``,
     `Your support ticket #${ticket.id} (${ticket.subject}) status was updated to: ${statusLabel}.`,
     ticket.admin_note ? `\nAdmin note: ${ticket.admin_note}` : "",
     ``,
-    `— MoneyTrend Support`,
+    `— Money Trend Support (${supportInbox()})`,
   ].join("\n");
+
+  const { renderEmailLayout, BRAND, escapeHtml } = require("./email/templates/layout");
+  const bodyHtml = `
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:${BRAND.cream};">
+      <tr>
+        <td style="padding:28px;font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:${BRAND.text};">
+          <h2 style="margin:0 0 12px;font-family:Georgia,Times,serif;color:${BRAND.green};">Ticket update</h2>
+          <p>Hi ${escapeHtml(user.full_name || "there")},</p>
+          <p>Your support ticket <strong>#${ticket.id}</strong> (${escapeHtml(ticket.subject)}) is now <strong>${escapeHtml(statusLabel)}</strong>.</p>
+          ${ticket.admin_note ? `<p><strong>Admin note:</strong> ${escapeHtml(ticket.admin_note)}</p>` : ""}
+        </td>
+      </tr>
+    </table>
+  `;
 
   return sendEmail({
     to: user.email,
     subject,
     text,
-    html: `<p>${text.replace(/\n/g, "<br/>")}</p>`,
+    html: renderEmailLayout({
+      title: subject,
+      preheader: `Ticket #${ticket.id} is ${statusLabel}`,
+      bodyHtml,
+    }),
     emailType: "support_status",
   });
 }
@@ -187,6 +244,7 @@ module.exports = {
   supportInbox,
   sendEmail,
   sendOtpEmail,
+  sendWelcomeEmail,
   sendKycVerifiedEmail,
   sendKycRejectedEmail,
   sendKycReminderEmail,

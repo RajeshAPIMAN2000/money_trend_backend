@@ -1,103 +1,106 @@
-const { getEmailConfig } = require("../emailConfig");
-const { escapeHtml, renderEmailLayout } = require("./layout");
+const { BRAND, escapeHtml, renderEmailLayout, supportEmail } = require("./layout");
 
 function buildKycVerifiedEmail({ firstName }) {
-  const cfg = getEmailConfig();
   const name = escapeHtml(firstName || "there");
+  const support = escapeHtml(supportEmail());
   const bodyHtml = `
-    <h1 style="margin:0 0 12px;font-size:24px;color:#0f172a;">KYC Verified Successfully</h1>
-    <p style="margin:0 0 16px;font-size:15px;line-height:1.6;color:#334155;">Hello ${name},</p>
-    <p style="margin:0 0 16px;font-size:15px;line-height:1.6;color:#334155;">
-      Great news — your KYC documents have been <strong style="color:#047857;">verified</strong> by the MoneyTrend team.
+    <h1 style="margin:0 0 10px;font-family:Georgia,'Times New Roman',Times,serif;font-size:24px;color:${BRAND.green};">KYC Verified Successfully</h1>
+    <p style="margin:0 0 12px;font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:1.6;color:${BRAND.text};">Hello ${name},</p>
+    <p style="margin:0 0 12px;font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:1.6;color:${BRAND.text};">
+      Great news — your KYC documents have been <strong style="color:${BRAND.green};">verified</strong>. You can now invest in FD/RD and manage your wallet securely.
     </p>
-    <p style="margin:0 0 16px;font-size:15px;line-height:1.6;color:#334155;">
-      You can now invest in Fixed Deposits and Recurring Deposits, manage your wallet, and track your portfolio securely.
+    <p style="margin:0;font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:12px;color:${BRAND.muted};">
+      Need help? <a href="mailto:${support}" style="color:${BRAND.green};">${support}</a>
     </p>
-    <div style="margin:0;padding:14px 16px;border-radius:10px;background:#ecfdf5;border:1px solid #a7f3d0;font-size:14px;color:#065f46;">
-      Your account is ready for investments.
-    </div>
   `;
   return {
-    subject: `KYC verified — welcome to ${cfg.appName} investing`,
+    subject: `KYC verified — welcome to Money Trend investing`,
     html: renderEmailLayout({
-      title: `KYC Verified | ${cfg.appName}`,
+      title: `KYC Verified | Money Trend`,
       preheader: "Your KYC is verified. You can start investing.",
       bodyHtml,
+      showFeatureCaptions: true,
     }),
-    text: `Hello ${firstName || "there"},\n\nYour KYC has been verified successfully on ${cfg.appName}. You can now invest in FD/RD.\n\nNeed help? ${cfg.supportEmail}`,
+    text: `Hello ${firstName || "there"},\n\nYour KYC has been verified successfully on Money Trend. You can now invest in FD/RD.\n\nNeed help? ${supportEmail()}`,
   };
 }
 
 function buildKycRejectedEmail({ firstName, reason }) {
-  const cfg = getEmailConfig();
   const name = escapeHtml(firstName || "there");
+  const support = escapeHtml(supportEmail());
   const reasonHtml = reason
-    ? `<p style="margin:0 0 16px;font-size:14px;line-height:1.6;color:#7f1d1d;"><strong>Reason:</strong> ${escapeHtml(reason)}</p>`
+    ? `<p style="margin:0 0 12px;font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:1.6;color:#7f1d1d;"><strong>Reason:</strong> ${escapeHtml(reason)}</p>`
     : "";
   const bodyHtml = `
-    <h1 style="margin:0 0 12px;font-size:24px;color:#0f172a;">KYC Update Required</h1>
-    <p style="margin:0 0 16px;font-size:15px;line-height:1.6;color:#334155;">Hello ${name},</p>
-    <p style="margin:0 0 16px;font-size:15px;line-height:1.6;color:#334155;">
-      We could not verify your KYC documents at this time. Please review your details and resubmit clear PAN and Aadhaar images.
+    <h1 style="margin:0 0 10px;font-family:Georgia,'Times New Roman',Times,serif;font-size:24px;color:${BRAND.green};">KYC Update Required</h1>
+    <p style="margin:0 0 12px;font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:1.6;color:${BRAND.text};">Hello ${name},</p>
+    <p style="margin:0 0 12px;font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:1.6;color:${BRAND.text};">
+      We could not verify your KYC documents. Please resubmit clear PAN and Aadhaar images.
     </p>
     ${reasonHtml}
-    <p style="margin:0;font-size:14px;line-height:1.6;color:#475569;">
-      Questions? Contact <a href="mailto:${escapeHtml(cfg.supportEmail)}" style="color:#0f766e;">${escapeHtml(cfg.supportEmail)}</a>.
+    <p style="margin:0;font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:12px;color:${BRAND.muted};">
+      Questions? <a href="mailto:${support}" style="color:${BRAND.green};">${support}</a>
     </p>
   `;
   return {
     subject: `Action needed — KYC could not be verified`,
     html: renderEmailLayout({
-      title: `KYC Update | ${cfg.appName}`,
+      title: `KYC Update | Money Trend`,
       preheader: "Your KYC needs attention. Please resubmit documents.",
       bodyHtml,
+      showFeatureCaptions: true,
     }),
-    text: `Hello ${firstName || "there"},\n\nYour KYC could not be verified.${reason ? `\nReason: ${reason}` : ""}\n\nPlease resubmit clear documents.\nNeed help? ${cfg.supportEmail}`,
+    text: `Hello ${firstName || "there"},\n\nYour KYC could not be verified.${reason ? `\nReason: ${reason}` : ""}\n\nPlease resubmit clear documents.\nNeed help? ${supportEmail()}`,
   };
 }
 
 function buildKycReminderEmail({ firstName }) {
-  const cfg = getEmailConfig();
   const name = escapeHtml(firstName || "there");
+  const support = escapeHtml(supportEmail());
   const bodyHtml = `
-    <h1 style="margin:0 0 12px;font-size:24px;color:#0f172a;">Complete Your KYC</h1>
-    <p style="margin:0 0 16px;font-size:15px;line-height:1.6;color:#334155;">Hello ${name},</p>
-    <p style="margin:0 0 16px;font-size:15px;line-height:1.6;color:#334155;">
-      Your MoneyTrend account is almost ready. Complete KYC with your PAN and Aadhaar to unlock FD/RD investments and withdrawals.
+    <h1 style="margin:0 0 10px;font-family:Georgia,'Times New Roman',Times,serif;font-size:24px;color:${BRAND.green};">Complete Your KYC</h1>
+    <p style="margin:0 0 12px;font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:1.6;color:${BRAND.text};">Hello ${name},</p>
+    <p style="margin:0 0 12px;font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:1.6;color:${BRAND.text};">
+      Your Money Trend account is almost ready. Complete KYC with PAN and Aadhaar to unlock FD/RD investments.
     </p>
-    <div style="margin:0;padding:14px 16px;border-radius:10px;background:#fff7ed;border:1px solid #fed7aa;font-size:14px;color:#9a3412;">
-      Reminder: KYC is required before investing.
-    </div>
+    <p style="margin:0;font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:12px;color:${BRAND.muted};">
+      Need help? <a href="mailto:${support}" style="color:${BRAND.green};">${support}</a>
+    </p>
   `;
   return {
-    subject: `Reminder — complete your ${cfg.appName} KYC`,
+    subject: `Reminder — complete your Money Trend KYC`,
     html: renderEmailLayout({
-      title: `KYC Reminder | ${cfg.appName}`,
-      preheader: "Complete KYC to start investing on MoneyTrend.",
+      title: `KYC Reminder | Money Trend`,
+      preheader: "Complete KYC to start investing on Money Trend.",
       bodyHtml,
+      showFeatureCaptions: true,
     }),
-    text: `Hello ${firstName || "there"},\n\nPlease complete your KYC on ${cfg.appName} to unlock investments.\n\nNeed help? ${cfg.supportEmail}`,
+    text: `Hello ${firstName || "there"},\n\nPlease complete your KYC on Money Trend to unlock investments.\n\nNeed help? ${supportEmail()}`,
   };
 }
 
 function buildKycSubmittedEmail({ firstName }) {
-  const cfg = getEmailConfig();
   const name = escapeHtml(firstName || "there");
+  const support = escapeHtml(supportEmail());
   const bodyHtml = `
-    <h1 style="margin:0 0 12px;font-size:24px;color:#0f172a;">KYC Submitted</h1>
-    <p style="margin:0 0 16px;font-size:15px;line-height:1.6;color:#334155;">Hello ${name},</p>
-    <p style="margin:0;font-size:15px;line-height:1.6;color:#334155;">
-      We have received your KYC documents. Our team will review them shortly. You will get an email once verification is complete.
+    <h1 style="margin:0 0 10px;font-family:Georgia,'Times New Roman',Times,serif;font-size:24px;color:${BRAND.green};">KYC Submitted</h1>
+    <p style="margin:0 0 12px;font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:1.6;color:${BRAND.text};">Hello ${name},</p>
+    <p style="margin:0 0 12px;font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:1.6;color:${BRAND.text};">
+      We have received your KYC documents. Our team will review them shortly.
+    </p>
+    <p style="margin:0;font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:12px;color:${BRAND.muted};">
+      Need help? <a href="mailto:${support}" style="color:${BRAND.green};">${support}</a>
     </p>
   `;
   return {
     subject: `KYC received — under review`,
     html: renderEmailLayout({
-      title: `KYC Submitted | ${cfg.appName}`,
+      title: `KYC Submitted | Money Trend`,
       preheader: "Your KYC documents are under review.",
       bodyHtml,
+      showFeatureCaptions: true,
     }),
-    text: `Hello ${firstName || "there"},\n\nYour KYC documents were received and are under review.\n\n— ${cfg.appName}`,
+    text: `Hello ${firstName || "there"},\n\nYour KYC documents were received and are under review.\n\n— Money Trend`,
   };
 }
 

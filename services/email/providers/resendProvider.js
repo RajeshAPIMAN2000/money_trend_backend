@@ -20,11 +20,26 @@ function createResendProvider() {
       };
       if (replyTo) payload.replyTo = replyTo;
       if (attachments?.length) {
-        payload.attachments = attachments.map((a) => ({
-          filename: a.filename,
-          content: a.content,
-          path: a.path,
-        }));
+        payload.attachments = await Promise.all(
+          attachments.map(async (a) => {
+            const item = {
+              filename: a.filename,
+            };
+            if (a.content) {
+              item.content = Buffer.isBuffer(a.content)
+                ? a.content.toString("base64")
+                : a.content;
+            } else if (a.path) {
+              const fs = require("fs");
+              item.content = fs.readFileSync(a.path).toString("base64");
+            }
+            if (a.cid) {
+              item.content_id = a.cid;
+              item.contentId = a.cid;
+            }
+            return item;
+          })
+        );
       }
 
       const { data, error } = await client.emails.send(payload);

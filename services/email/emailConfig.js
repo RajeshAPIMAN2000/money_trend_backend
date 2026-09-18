@@ -34,10 +34,16 @@ function getEmailConfig() {
     process.env.MAIL_FROM_EMAIL || process.env.SUPPORT_EMAIL || "info@moneytrend.in"
   );
   const fromName = trim(process.env.MAIL_FROM_NAME || "MoneyTrend");
-  const publicBase = trim(process.env.PUBLIC_BASE_URL || process.env.APP_URL || "").replace(
-    /\/+$/,
-    ""
-  );
+  const publicBase = trim(
+    process.env.PUBLIC_BASE_URL ||
+      process.env.APP_URL ||
+      process.env.FRONTEND_ORIGIN ||
+      process.env.CLIENT_ORIGIN ||
+      ""
+  )
+    .split(",")[0]
+    .trim()
+    .replace(/\/+$/, "");
   const logoPath = trim(process.env.MAIL_LOGO_PATH || "/uploads/money-trend-logo.png");
   const logoUrl =
     trim(process.env.MAIL_LOGO_URL) ||
@@ -86,7 +92,7 @@ function getEmailConfig() {
     logoUrl,
     logoPath,
     publicBaseUrl: publicBase,
-    appName: trim(process.env.APP_NAME || "MoneyTrend"),
+    appName: trim(process.env.APP_NAME || "Money Trend"),
     otpExpiryMinutes: Number(process.env.OTP_EXPIRY_MINUTES || 10),
     otpMaxAttempts: Number(process.env.OTP_MAX_ATTEMPTS || process.env.OTP_MAX_VERIFY_ATTEMPTS || 5),
     otpResendCooldownSeconds: Number(
