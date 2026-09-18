@@ -2,6 +2,7 @@ const {
   getDummyPaymentConfig,
   createDummyPayment,
   payDummyPayment,
+  verifyDummyOtp,
   getDummyPayment,
   hasPaidCibilReport,
 } = require("../services/dummyPaymentService");
@@ -35,7 +36,7 @@ async function createPayment(req, res) {
 
     return res.status(201).json({
       success: true,
-      message: "Dummy payment order created. Submit card details to /api/payments/dummy/pay",
+      message: "Dummy payment order created. Submit card, then verify OTP 1234",
       data,
     });
   } catch (error) {
@@ -91,7 +92,9 @@ async function pay(req, res) {
       success: true,
       message: data.already_paid
         ? "Payment already completed"
-        : "Dummy payment approved (demo — no real charge)",
+        : data.status === "otp_pending"
+          ? "Card accepted. Enter dummy OTP 1234 to complete payment"
+          : "Dummy payment approved (demo — no real charge)",
       data,
     });
   } catch (error) {
@@ -99,6 +102,44 @@ async function pay(req, res) {
     return res.status(status).json({
       success: false,
       message: error.message || "Dummy payment failed",
+      code: error.code || undefined,
+    });
+  }
+}
+
+async function verifyOtp(req, res) {
+  try {
+    const orderId = String(req.body.order_id || req.body.orderId || "").trim();
+    const otp = req.body.otp || req.body.otp_code || req.body.otpCode || req.body.code;
+
+    if (!orderId) {
+      return res.status(400).json({
+        success: false,
+        message: "order_id is required",
+        code: "VALIDATION_ERROR",
+      });
+    }
+
+    const data = await verifyDummyOtp({
+      userId: req.user.id,
+      orderId,
+      otp,
+      ipAddress: req.ip,
+      userAgent: req.headers["user-agent"],
+    });
+
+    return res.json({
+      success: true,
+      message: data.already_paid
+        ? "Payment already completed"
+        : "Dummy OTP verified — payment approved (demo)",
+      data,
+    });
+  } catch (error) {
+    const status = error.status || 500;
+    return res.status(status).json({
+      success: false,
+      message: error.message || "OTP verification failed",
       code: error.code || undefined,
     });
   }
@@ -141,6 +182,7 @@ module.exports = {
   getConfig,
   createPayment,
   pay,
+  verifyOtp,
   getPayment,
   cibilUnlockStatus,
 };

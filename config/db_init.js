@@ -717,7 +717,7 @@ async function ensureCoreTables() {
       order_id VARCHAR(80) NOT NULL,
       payment_id VARCHAR(80) NULL,
       auth_code VARCHAR(20) NULL,
-      status ENUM('created','paid','failed','cancelled') NOT NULL DEFAULT 'created',
+      status ENUM('created','otp_pending','paid','failed','cancelled') NOT NULL DEFAULT 'created',
       card_brand VARCHAR(40) NULL,
       card_last4 VARCHAR(4) NULL,
       description VARCHAR(500) NULL,
@@ -735,6 +735,15 @@ async function ensureCoreTables() {
       CONSTRAINT fk_dummy_pay_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
+
+  try {
+    await pool.query(
+      `ALTER TABLE dummy_payments
+       MODIFY COLUMN status ENUM('created','otp_pending','paid','failed','cancelled') NOT NULL DEFAULT 'created'`
+    );
+  } catch (err) {
+    console.warn("[DB] dummy_payments status ENUM widen skipped:", err.message);
+  }
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS seo_settings (

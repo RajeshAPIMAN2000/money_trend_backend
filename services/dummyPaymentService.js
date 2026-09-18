@@ -1,6 +1,6 @@
 /**
  * Dummy payment gateway for bank / stakeholder demos.
- * Uses fake card numbers only — never charges a real network.
+ * Uses fake card numbers + dummy OTP — never charges a real network.
  */
 
 const crypto = require("crypto");
@@ -9,6 +9,9 @@ const { creditWallet, ensureWallet } = require("./walletService");
 const { writeAuditLog } = require("../utils/audit");
 
 const PURPOSES = ["wallet_deposit", "cibil_report", "fd_invest", "rd_invest"];
+
+/** Fixed bank-demo OTP (shown to banks / frontend) */
+const DEMO_OTP = String(process.env.DUMMY_PAYMENT_OTP || "1234");
 
 /** Demo cards shown to banks — success / decline fixtures */
 const DEMO_CARDS = [
@@ -53,7 +56,7 @@ function isDummyPaymentEnabled() {
 function getPurposeAmount(purpose) {
   const map = {
     cibil_report: Number(process.env.DUMMY_PAYMENT_CIBIL_FEE || 99),
-    wallet_deposit: null, // amount from request
+    wallet_deposit: null,
     fd_invest: null,
     rd_invest: null,
   };
@@ -120,7 +123,6 @@ function evaluateDummyCard({ number, cvv, expiryMonth, expiryYear, cardHolder })
     };
   }
 
-  // Any other card succeeds in dummy mode (for flexible demos)
   return {
     ok: true,
     brand: fixture?.brand || detectBrand(digits),
@@ -134,6 +136,16 @@ function makeIds() {
   const paymentId = `dummy_pay_${Date.now()}_${crypto.randomBytes(3).toString("hex")}`;
   const authCode = String(Math.floor(100000 + Math.random() * 900000));
   return { orderId, paymentId, authCode };
+}
+
+function getDemoOtpInfo() {
+  return {
+    otp_required: true,
+    demo_otp: DEMO_OTP,
+    otp_length: DEMO_OTP.length,
+    otp_hint: `Enter dummy OTP ${DEMO_OTP} for bank demo (no SMS is sent)`,
+    verify_endpoint: "POST /api/payments/dummy/verify-otp",
+  };
 }
 
 async function createDummyPayment({
@@ -212,6 +224,7 @@ async function createDummyPayment({
     status: "created",
     gateway: "dummy",
     mode: "demo",
+    next_step: "POST /api/payments/dummy/pay with card details, then verify OTP",
     demo_note:
       "Dummy payment gateway for bank demonstration. No real money is charged.",
     demo_cards: DEMO_CARDS.map((c) => ({
@@ -222,15 +235,11 @@ async function createDummyPayment({
       result: c.result,
       label: c.label,
     })),
+    otp: getDemoOtpInfo(),
   };
 }
 
 async function fulfillPayment(row, { paymentId, authCode, cardMeta }) {
-  const meta =
-    typeof row.meta_json === "string"
-      ? JSON.parse(row.meta_json || "{}")
-      : row.meta_json || {};
-
   let fulfillment = { type: row.purpose };
 
   if (row.purpose === "wallet_deposit" || row.purpose === "fd_invest" || row.purpose === "rd_invest") {
@@ -293,6 +302,9 @@ async function fulfillPayment(row, { paymentId, authCode, cardMeta }) {
   return fulfillment;
 }
 
+/**
+ * Step 1: submit card → moves order to otp_pending (bank OTP screen).
+ */
 async function payDummyPayment({
   userId,
   orderId,
@@ -338,6 +350,27 @@ async function payDummyPayment({
     };
   }
 
+  if (row.status === "otp_pending") {
+    return {
+      already_paid: false,
+      gateway: "dummy",
+      mode: "demo",
+      order_id: row.order_id,
+      status: "otp_pending",
+      amount: Number(row.amount),
+      currency: row.currency,
+      purpose: row.purpose,
+      card: {
+        brand: row.card_brand,
+        last4: row.card_last4,
+        masked: row.card_last4 ? `************${row.card_last4}` : null,
+      },
+      otp: getDemoOtpInfo(),
+      next_step: "Enter dummy OTP and call POST /api/payments/dummy/verify-otp",
+      demo_note: `Bank OTP screen — use OTP ${DEMO_OTP}`,
+    };
+  }
+
   const evaluated = evaluateDummyCard({
     number: cardNumber,
     cvv,
@@ -357,11 +390,167 @@ async function payDummyPayment({
     throw err;
   }
 
+  const existingMeta =
+    typeof row.meta_json === "string"
+      ? JSON.parse(row.meta_json || "{}")
+      : row.meta_json || {};
+
+  const otpMeta = {
+    ...existingMeta,
+    card_holder: String(cardHolder).trim(),
+    card_brand: evaluated.brand,
+    card_last4: evaluated.last4,
+    card_masked: evaluated.masked,
+    otp_pending_at: new Date().toISOString(),
+  };
+
+  await pool.query(
+    `UPDATE dummy_payments
+     SET status = 'otp_pending',
+         card_brand = :brand,
+         card_last4 = :last4,
+         meta_json = :meta,
+         failure_code = NULL,
+         failure_message = NULL
+     WHERE id = :id`,
+    {
+      brand: evaluated.brand,
+      last4: evaluated.last4,
+      meta: JSON.stringify(otpMeta),
+      id: row.id,
+    }
+  );
+
+  await writeAuditLog({
+    userId,
+    action: "DUMMY_PAYMENT_OTP_SENT",
+    entityType: "dummy_payment",
+    entityId: row.id,
+    ipAddress,
+    userAgent,
+    meta: {
+      purpose: row.purpose,
+      amount: row.amount,
+      card_last4: evaluated.last4,
+      demo_otp: DEMO_OTP,
+    },
+  });
+
+  return {
+    already_paid: false,
+    gateway: "dummy",
+    mode: "demo",
+    order_id: row.order_id,
+    status: "otp_pending",
+    amount: Number(row.amount),
+    currency: row.currency,
+    purpose: row.purpose,
+    card: {
+      brand: evaluated.brand,
+      last4: evaluated.last4,
+      masked: evaluated.masked,
+      holder: String(cardHolder).trim(),
+    },
+    otp: getDemoOtpInfo(),
+    next_step: "Show OTP screen, then POST /api/payments/dummy/verify-otp",
+    bank_demo: {
+      acquirer: "MoneyTrend Dummy Acquirer",
+      response_code: "OTP_REQUIRED",
+      response_message: "Enter OTP sent to registered mobile (demo)",
+    },
+    demo_note: `Card accepted. Enter dummy OTP ${DEMO_OTP} to complete payment. No real SMS is sent.`,
+  };
+}
+
+/**
+ * Step 2: verify dummy OTP → marks paid + fulfills wallet/cibil.
+ */
+async function verifyDummyOtp({
+  userId,
+  orderId,
+  otp,
+  ipAddress,
+  userAgent,
+}) {
+  if (!isDummyPaymentEnabled()) {
+    const err = new Error("Dummy payment gateway is disabled");
+    err.code = "DUMMY_PAYMENT_DISABLED";
+    err.status = 503;
+    throw err;
+  }
+
+  const otpClean = String(otp || "").replace(/\s+/g, "").trim();
+  if (!otpClean) {
+    const err = new Error("OTP is required");
+    err.code = "OTP_REQUIRED";
+    err.status = 400;
+    throw err;
+  }
+
+  const [rows] = await pool.query(
+    `SELECT * FROM dummy_payments WHERE order_id = :orderId AND user_id = :userId LIMIT 1`,
+    { orderId, userId }
+  );
+  if (!rows.length) {
+    const err = new Error("Dummy payment order not found");
+    err.code = "NOT_FOUND";
+    err.status = 404;
+    throw err;
+  }
+
+  const row = rows[0];
+  if (row.status === "paid") {
+    return {
+      already_paid: true,
+      order_id: row.order_id,
+      payment_id: row.payment_id,
+      status: "paid",
+      amount: Number(row.amount),
+      purpose: row.purpose,
+      fulfillment:
+        typeof row.fulfillment_json === "string"
+          ? JSON.parse(row.fulfillment_json || "{}")
+          : row.fulfillment_json,
+    };
+  }
+
+  if (row.status !== "otp_pending") {
+    const err = new Error("Submit card details first via POST /api/payments/dummy/pay");
+    err.code = "CARD_STEP_REQUIRED";
+    err.status = 400;
+    throw err;
+  }
+
+  if (otpClean !== DEMO_OTP) {
+    await pool.query(
+      `UPDATE dummy_payments
+       SET failure_code = 'INVALID_OTP',
+           failure_message = 'Invalid dummy OTP'
+       WHERE id = :id`,
+      { id: row.id }
+    );
+    const err = new Error(`Invalid OTP. For bank demo use ${DEMO_OTP}`);
+    err.code = "INVALID_OTP";
+    err.status = 402;
+    throw err;
+  }
+
+  const meta =
+    typeof row.meta_json === "string"
+      ? JSON.parse(row.meta_json || "{}")
+      : row.meta_json || {};
+
+  const cardMeta = {
+    brand: row.card_brand || meta.card_brand || "Card",
+    last4: row.card_last4 || meta.card_last4 || "0000",
+    masked: meta.card_masked || (row.card_last4 ? `************${row.card_last4}` : "****"),
+  };
+
   const { paymentId, authCode } = makeIds();
   const fulfillment = await fulfillPayment(row, {
     paymentId,
     authCode,
-    cardMeta: evaluated,
+    cardMeta,
   });
 
   await writeAuditLog({
@@ -374,8 +563,9 @@ async function payDummyPayment({
     meta: {
       purpose: row.purpose,
       amount: row.amount,
-      card_last4: evaluated.last4,
+      card_last4: cardMeta.last4,
       paymentId,
+      otp_verified: true,
     },
   });
 
@@ -391,19 +581,20 @@ async function payDummyPayment({
     currency: row.currency,
     purpose: row.purpose,
     card: {
-      brand: evaluated.brand,
-      last4: evaluated.last4,
-      masked: evaluated.masked,
-      holder: String(cardHolder).trim(),
+      brand: cardMeta.brand,
+      last4: cardMeta.last4,
+      masked: cardMeta.masked,
+      holder: meta.card_holder || null,
     },
+    otp_verified: true,
     bank_demo: {
       acquirer: "MoneyTrend Dummy Acquirer",
       response_code: "00",
-      response_message: "Approved (dummy)",
+      response_message: "Approved after OTP (dummy)",
       rrn: `DUMMY${authCode}${Date.now().toString().slice(-4)}`,
     },
     fulfillment,
-    demo_note: "This is a simulated payment for bank demonstration. No real charge occurred.",
+    demo_note: "OTP verified. Simulated payment complete — no real charge occurred.",
   };
 }
 
@@ -425,6 +616,7 @@ async function getDummyPayment(userId, orderId) {
       typeof row.fulfillment_json === "string"
         ? JSON.parse(row.fulfillment_json || "{}")
         : row.fulfillment_json,
+    otp: row.status === "otp_pending" ? getDemoOtpInfo() : undefined,
   };
 }
 
@@ -449,18 +641,26 @@ function getDummyPaymentConfig() {
       cibil_report: Number(process.env.DUMMY_PAYMENT_CIBIL_FEE || 99),
     },
     demo_cards: DEMO_CARDS,
+    otp: getDemoOtpInfo(),
+    flow: [
+      "1. POST /api/payments/dummy/create",
+      "2. POST /api/payments/dummy/pay (card details)",
+      `3. POST /api/payments/dummy/verify-otp with otp=${DEMO_OTP}`,
+    ],
     demo_note:
-      "Use the listed dummy card numbers for bank demos. Payments never hit a live card network.",
+      "Use dummy cards, then enter OTP 1234 on the bank OTP screen. No real SMS or charge.",
   };
 }
 
 module.exports = {
   PURPOSES,
   DEMO_CARDS,
+  DEMO_OTP,
   isDummyPaymentEnabled,
   getDummyPaymentConfig,
   createDummyPayment,
   payDummyPayment,
+  verifyDummyOtp,
   getDummyPayment,
   hasPaidCibilReport,
   evaluateDummyCard,
