@@ -104,6 +104,11 @@ function extractCategory(body = {}) {
 
 function mapArticle(row, { includeStatus = false } = {}) {
   if (!row) return null;
+  const authorName =
+    row.author_name ||
+    row.full_name ||
+    row.author ||
+    null;
   const item = {
     id: row.id,
     type: row.type,
@@ -112,15 +117,29 @@ function mapArticle(row, { includeStatus = false } = {}) {
     description: row.description,
     category: row.category || null,
     image: formatImageUrl(row.image),
+    author_id: row.created_by != null ? Number(row.created_by) : null,
+    author_name: authorName ? String(authorName) : null,
+    author: authorName ? String(authorName) : null,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
   if (includeStatus) {
     item.status = row.status;
-    item.created_by = row.created_by;
+    item.created_by = row.created_by != null ? Number(row.created_by) : null;
   }
   return item;
 }
+
+const ARTICLE_SELECT = `
+  a.id, a.type, a.heading, a.description, a.category, a.image, a.status,
+  a.created_by, a.created_at, a.updated_at,
+  u.full_name AS author_name
+`;
+
+const ARTICLE_FROM = `
+  FROM articles a
+  LEFT JOIN users u ON u.id = a.created_by
+`;
 
 function validateArticleInput(body, { requireImage = false, isUpdate = false } = {}) {
   const errors = [];
@@ -156,24 +175,24 @@ function validateArticleInput(body, { requireImage = false, isUpdate = false } =
 }
 
 async function listAdmin(type, { status, category, limit = 50, offset = 0 } = {}) {
-  const conditions = ["type = :type"];
+  const conditions = ["a.type = :type"];
   const params = { type };
   if (status) {
-    conditions.push("status = :status");
+    conditions.push("a.status = :status");
     params.status = status;
   }
   if (category) {
-    conditions.push("category = :category");
+    conditions.push("a.category = :category");
     params.category = String(category).trim();
   }
   const safeLimit = Math.min(Math.max(Number(limit) || 50, 1), 200);
   const safeOffset = Math.max(Number(offset) || 0, 0);
 
   const [rows] = await pool.query(
-    `SELECT id, type, heading, description, category, image, status, created_by, created_at, updated_at
-     FROM articles
+    `SELECT ${ARTICLE_SELECT}
+     ${ARTICLE_FROM}
      WHERE ${conditions.join(" AND ")}
-     ORDER BY created_at DESC
+     ORDER BY a.created_at DESC
      LIMIT ${safeLimit} OFFSET ${safeOffset}`,
     params
   );
@@ -184,24 +203,24 @@ async function listAdmin(type, { status, category, limit = 50, offset = 0 } = {}
 async function listPublished(type, { limit = 20, offset = 0, category } = {}) {
   const safeLimit = Math.min(Math.max(Number(limit) || 20, 1), 100);
   const safeOffset = Math.max(Number(offset) || 0, 0);
-  const conditions = ["type = :type", "status = 'published'"];
+  const conditions = ["a.type = :type", "a.status = 'published'"];
   const params = { type };
   if (category) {
-    conditions.push("category = :category");
+    conditions.push("a.category = :category");
     params.category = String(category).trim();
   }
 
   const [rows] = await pool.query(
-    `SELECT id, type, heading, description, category, image, created_at, updated_at
-     FROM articles
+    `SELECT ${ARTICLE_SELECT}
+     ${ARTICLE_FROM}
      WHERE ${conditions.join(" AND ")}
-     ORDER BY created_at DESC
+     ORDER BY a.created_at DESC
      LIMIT ${safeLimit} OFFSET ${safeOffset}`,
     params
   );
 
   const [countRows] = await pool.query(
-    `SELECT COUNT(*) AS total FROM articles WHERE ${conditions.join(" AND ")}`,
+    `SELECT COUNT(*) AS total FROM articles a WHERE ${conditions.join(" AND ")}`,
     params
   );
 
@@ -231,9 +250,9 @@ async function listDistinctCategories(type = null) {
 
 async function getPublishedById(id, type) {
   const [rows] = await pool.query(
-    `SELECT id, type, heading, description, category, image, created_at, updated_at
-     FROM articles
-     WHERE id = :id AND type = :type AND status = 'published'
+    `SELECT ${ARTICLE_SELECT}
+     ${ARTICLE_FROM}
+     WHERE a.id = :id AND a.type = :type AND a.status = 'published'
      LIMIT 1`,
     { id, type }
   );
@@ -242,8 +261,10 @@ async function getPublishedById(id, type) {
 
 async function getAdminById(id, type) {
   const [rows] = await pool.query(
-    `SELECT id, type, heading, description, category, image, status, created_by, created_at, updated_at
-     FROM articles WHERE id = :id AND type = :type LIMIT 1`,
+    `SELECT ${ARTICLE_SELECT}
+     ${ARTICLE_FROM}
+     WHERE a.id = :id AND a.type = :type
+     LIMIT 1`,
     { id, type }
   );
   return rows.length ? mapArticle(rows[0], { includeStatus: true }) : null;
@@ -389,15 +410,20 @@ async function deleteArticle(id, type, adminUserId, reqMeta = {}) {
 }
 
 async function getLatestInsights(limit = 3) {
+  const safeLimit = Math.min(Number(limit) || 3, 10);
   const [blogs] = await pool.query(
-    `SELECT id, type, heading, description, category, image, created_at, updated_at
-     FROM articles WHERE type = 'blog' AND status = 'published'
-     ORDER BY created_at DESC LIMIT ${Math.min(limit, 10)}`
+    `SELECT ${ARTICLE_SELECT}
+     ${ARTICLE_FROM}
+     WHERE a.type = 'blog' AND a.status = 'published'
+     ORDER BY a.created_at DESC
+     LIMIT ${safeLimit}`
   );
   const [news] = await pool.query(
-    `SELECT id, type, heading, description, category, image, created_at, updated_at
-     FROM articles WHERE type = 'news' AND status = 'published'
-     ORDER BY created_at DESC LIMIT ${Math.min(limit, 10)}`
+    `SELECT ${ARTICLE_SELECT}
+     ${ARTICLE_FROM}
+     WHERE a.type = 'news' AND a.status = 'published'
+     ORDER BY a.created_at DESC
+     LIMIT ${safeLimit}`
   );
 
   return {
