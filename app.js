@@ -30,6 +30,12 @@ const equifaxRoutes = require("./routes/equifax");
 const paymentsRoutes = require("./routes/payments");
 const seoRoutes = require("./routes/seo");
 const { serveSitemap, serveRobots } = require("./controllers/seoController");
+const {
+  listBlogs,
+  getBlogById,
+  listNews,
+  getNewsById,
+} = require("./controllers/articleController");
 
 const app = express();
 
@@ -68,6 +74,11 @@ function mountApiRoutes(basePath = "") {
   app.use(route("/rates"), ratesRoutes);
   app.use(route("/home"), homeRoutes);
   app.use(route("/articles"), articlesRoutes);
+  // Aliases so /api/blogs and /api/news return JSON (not SPA HTML)
+  app.get(route("/blogs"), listBlogs);
+  app.get(route("/blogs/:id"), getBlogById);
+  app.get(route("/news"), listNews);
+  app.get(route("/news/:id"), getNewsById);
   app.use(route("/banners"), bannersRoutes);
   app.use(route("/support"), supportRoutes);
   app.use(route("/equifax"), equifaxRoutes);
@@ -99,7 +110,10 @@ app.use((req, res, next) => {
   res.setHeader("Referrer-Policy", "no-referrer");
   res.setHeader("X-XSS-Protection", "0");
   res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
-  res.setHeader("Cache-Control", "no-store");
+  // Allow CDN/browser caching for public uploads; keep API JSON uncached
+  if (!String(req.path || "").startsWith("/uploads")) {
+    res.setHeader("Cache-Control", "no-store");
+  }
   next();
 });
 
@@ -170,6 +184,11 @@ app.get(["/api", "/api/"], (_req, res) => {
       "/api/fd",
       "/api/wallet",
       "/api/support",
+      "/api/articles/blogs",
+      "/api/articles/news",
+      "/api/blogs",
+      "/api/news",
+      "/api/banners",
     ],
     docs: "/api-docs",
   });
@@ -191,10 +210,15 @@ mountApiRoutes("/api");
 mountApiRoutes("");
 
 app.use((req, res) => {
+  const path = String(req.originalUrl || "");
+  const looksLikeContent =
+    /(^|\/)(blogs|news)(\/|$|\?)/i.test(path) && !path.startsWith("/api");
   return res.status(404).json({
     success: false,
     message: `Route not found: ${req.originalUrl}`,
-    hint: "Redeploy the latest Money Trend backend and ensure /api is proxied to this Node app.",
+    hint: looksLikeContent
+      ? "You hit a frontend page path. Use /api/blogs, /api/news, or /api/articles/blogs|/news for JSON."
+      : "Redeploy the latest Money Trend backend and ensure /api and /uploads are proxied to this Node app (nginx ^~ locations).",
   });
 });
 

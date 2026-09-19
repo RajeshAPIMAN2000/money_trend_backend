@@ -17,13 +17,35 @@ const ARTICLE_CATEGORIES = [
   "General",
 ];
 
+function publicBaseUrl() {
+  return String(
+    process.env.PUBLIC_BASE_URL ||
+      process.env.APP_URL ||
+      process.env.API_PUBLIC_URL ||
+      ""
+  )
+    .split(",")[0]
+    .trim()
+    .replace(/\/+$/, "");
+}
+
+/**
+ * Return a browser-usable image path.
+ * Prefer absolute URL in production so images work when the SPA and API share a domain via nginx,
+ * or when the admin UI is on a different host.
+ */
 function formatImageUrl(image) {
   if (!image) return null;
   const value = String(image).trim();
-  if (value.startsWith("http://") || value.startsWith("https://") || value.startsWith("/uploads/")) {
+  if (!value) return null;
+  if (value.startsWith("http://") || value.startsWith("https://") || value.startsWith("data:")) {
     return value;
   }
-  return `/uploads/${value.replace(/^\/+/, "")}`;
+  const path = value.startsWith("/uploads/")
+    ? value
+    : `/uploads/${value.replace(/^\/+/, "")}`;
+  const base = publicBaseUrl();
+  return base ? `${base}${path}` : path;
 }
 
 /**

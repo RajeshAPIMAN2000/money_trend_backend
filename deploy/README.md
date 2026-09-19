@@ -125,17 +125,22 @@ Point DNS A records to your VPS IP first.
 
 - Frontend: `https://yourdomain.com`
 - API: `https://yourdomain.com/api/health`
+- Blogs JSON: `https://yourdomain.com/api/blogs` or `/api/articles/blogs`
+- News JSON: `https://yourdomain.com/api/news` or `/api/articles/news`
 - Swagger: `https://yourdomain.com/api-docs`
 - Uploads: `https://yourdomain.com/uploads/...`
+
+> If blogs/news return HTML (`<!doctype html>`), the request hit the SPA (`/blogs`) instead of the API (`/api/blogs`).  
+> If images 404, ensure nginx uses `location ^~ /uploads/` (not a regex that serves frontend static files).
 
 ## Architecture
 
 ```
 Internet → Nginx :80/:443
               ├─ /           → /var/www/moneytrend/frontend (SPA)
-              ├─ /api/*      → http://127.0.0.1:5001/api/*
+              ├─ /api/*      → http://127.0.0.1:5001/api/*   (^~)
               ├─ /api-docs   → http://127.0.0.1:5001/api-docs
-              └─ /uploads/*  → http://127.0.0.1:5001/uploads/*
+              └─ /uploads/*  → http://127.0.0.1:5001/uploads/* (^~)
          PM2 → node app.js (PORT=5001)
          MySQL → money_trend DB
 ```

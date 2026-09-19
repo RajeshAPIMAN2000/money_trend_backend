@@ -7,6 +7,7 @@ const {
   getCommissionPercent,
   getBalance,
   checkInvestAffordability,
+  maxInvestableFromBalance,
 } = require("../services/walletService");
 const { resolveBankLogo } = require("../services/banks/bankLogos");
 
@@ -170,18 +171,29 @@ async function addFd(req, res) {
     const bankName = sanitizeText(req.body.bank_name || req.body.bankName || req.body.bank, 150);
     const bankCode = sanitizeText(req.body.bank_code || req.body.bankCode || "", 50) || null;
     const fdNumber = sanitizeText(req.body.fd_number || req.body.fdNumber || "", 100) || null;
-    const principal = Number(req.body.principal_amount || req.body.principal || req.body.amount);
     const interestRate = Number(req.body.interest_rate || req.body.interestRate || req.body.rate);
     const tenureMonths = Number(req.body.tenure_months || req.body.tenureMonths || req.body.tenure);
     const startRaw = req.body.start_date || req.body.startDate;
     const compounding = sanitizeText(req.body.compounding || "quarterly", 30) || "quarterly";
     const notes = sanitizeText(req.body.notes || "", 500) || null;
+    const investAll =
+      req.body.invest_all === true ||
+      req.body.invest_all === "true" ||
+      req.body.use_max_wallet === true ||
+      req.body.use_max_wallet === "true";
+
+    const userId = req.user.id;
+    let principal = Number(req.body.principal_amount || req.body.principal || req.body.amount || 0);
+    if (investAll) {
+      const bal = await getBalance(userId);
+      principal = maxInvestableFromBalance(bal);
+    }
 
     if (!bankName || !principal || !interestRate || !tenureMonths || !startRaw) {
       return res.status(400).json({
         success: false,
         message:
-          "bank_name, principal_amount, interest_rate, tenure_months and start_date are required",
+          "bank_name, principal_amount (or invest_all=true), interest_rate, tenure_months and start_date are required",
       });
     }
     if (principal <= 0 || interestRate <= 0 || tenureMonths <= 0) {
@@ -200,13 +212,12 @@ async function addFd(req, res) {
 
     const maturityDate = addMonths(startParsed.iso, tenureMonths);
     const maturityAmount = calcFdMaturity(principal, interestRate, tenureMonths, compounding);
-    const userId = req.user.id;
 
     const afford = await checkInvestAffordability(userId, principal, "FD");
     if (!afford.can_pay_from_wallet) {
       return res.status(402).json({
         success: false,
-        message: `Insufficient wallet balance. Need ₹${afford.required_total} (FD ₹${principal} + admin fee ${afford.admin_fee_percent}% ₹${afford.admin_fee}). Show payment gateway.`,
+        message: `Insufficient wallet balance. Need ₹${afford.required_total} (FD ₹${principal} + admin fee ${afford.admin_fee_percent}% ₹${afford.admin_fee}). Add money to wallet first (payment only credits wallet), then invest again.`,
         code: "INSUFFICIENT_WALLET_BALANCE",
         data: afford,
       });
@@ -256,7 +267,7 @@ async function addFd(req, res) {
       entityId: result.insertId,
       ipAddress: req.ip,
       userAgent: req.headers["user-agent"],
-      meta: { bankName, principal, interestRate, commission: walletResult.commission },
+      meta: { bankName, principal, interestRate, commission: walletResult.commission, invest_all: investAll },
     });
 
     return res.status(201).json({
@@ -272,12 +283,14 @@ async function addFd(req, res) {
         maturity_date: maturityDate,
         maturity_amount: maturityAmount,
         product: "FD",
+        invest_all: investAll,
         wallet: {
           debited_investment: walletResult.principal,
           admin_commission_percent: walletResult.commission_percent,
           admin_commission: walletResult.commission,
           total_debited: walletResult.total_debited,
           balance: walletResult.balance,
+          wallet_balance: walletResult.balance,
         },
         regulatory_note:
           "Platform fee 2–3% disclosed at investment. FD interest is taxable; TDS may apply u/s 194A as per Income Tax Act / RBI deposit norms.",
@@ -326,19 +339,30 @@ async function addRd(req, res) {
     const bankName = sanitizeText(req.body.bank_name || req.body.bankName || req.body.bank, 150);
     const bankCode = sanitizeText(req.body.bank_code || req.body.bankCode || "", 50) || null;
     const rdNumber = sanitizeText(req.body.rd_number || req.body.rdNumber || "", 100) || null;
-    const monthlyAmount = Number(
-      req.body.monthly_amount || req.body.monthlyAmount || req.body.amount
-    );
     const interestRate = Number(req.body.interest_rate || req.body.interestRate || req.body.rate);
     const tenureMonths = Number(req.body.tenure_months || req.body.tenureMonths || req.body.tenure);
     const startRaw = req.body.start_date || req.body.startDate;
     const notes = sanitizeText(req.body.notes || "", 500) || null;
+    const investAll =
+      req.body.invest_all === true ||
+      req.body.invest_all === "true" ||
+      req.body.use_max_wallet === true ||
+      req.body.use_max_wallet === "true";
+
+    const userId = req.user.id;
+    let monthlyAmount = Number(
+      req.body.monthly_amount || req.body.monthlyAmount || req.body.amount || 0
+    );
+    if (investAll) {
+      const bal = await getBalance(userId);
+      monthlyAmount = maxInvestableFromBalance(bal);
+    }
 
     if (!bankName || !monthlyAmount || !interestRate || !tenureMonths || !startRaw) {
       return res.status(400).json({
         success: false,
         message:
-          "bank_name, monthly_amount, interest_rate, tenure_months and start_date are required",
+          "bank_name, monthly_amount (or invest_all=true), interest_rate, tenure_months and start_date are required",
       });
     }
     if (monthlyAmount <= 0 || interestRate <= 0 || tenureMonths <= 0) {
@@ -357,14 +381,13 @@ async function addRd(req, res) {
 
     const maturityDate = addMonths(startParsed.iso, tenureMonths);
     const maturityAmount = calcRdMaturity(monthlyAmount, interestRate, tenureMonths);
-    const userId = req.user.id;
     // First instalment deducted from wallet at booking (recurring later can be scheduled)
     const investAmount = monthlyAmount;
     const afford = await checkInvestAffordability(userId, investAmount, "RD");
     if (!afford.can_pay_from_wallet) {
       return res.status(402).json({
         success: false,
-        message: `Insufficient wallet balance. Need ₹${afford.required_total} (RD ₹${investAmount} + admin fee ${afford.admin_fee_percent}% ₹${afford.admin_fee}). Show payment gateway.`,
+        message: `Insufficient wallet balance. Need ₹${afford.required_total} (RD ₹${investAmount} + admin fee ${afford.admin_fee_percent}% ₹${afford.admin_fee}). Add money to wallet first, then invest again.`,
         code: "INSUFFICIENT_WALLET_BALANCE",
         data: afford,
       });
@@ -413,12 +436,12 @@ async function addRd(req, res) {
       entityId: result.insertId,
       ipAddress: req.ip,
       userAgent: req.headers["user-agent"],
-      meta: { bankName, monthlyAmount, interestRate, commission: walletResult.commission },
+      meta: { bankName, monthlyAmount, interestRate, commission: walletResult.commission, invest_all: investAll },
     });
 
     return res.status(201).json({
       success: true,
-      message: "RD invested from wallet successfully",
+      message: "RD booked — first instalment deducted from wallet",
       data: {
         id: result.insertId,
         bank_name: bankName,
@@ -429,12 +452,14 @@ async function addRd(req, res) {
         maturity_date: maturityDate,
         maturity_amount: maturityAmount,
         product: "RD",
+        invest_all: investAll,
         wallet: {
           debited_investment: walletResult.principal,
           admin_commission_percent: walletResult.commission_percent,
           admin_commission: walletResult.commission,
           total_debited: walletResult.total_debited,
           balance: walletResult.balance,
+          wallet_balance: walletResult.balance,
         },
         regulatory_note:
           "Platform fee 2–3% disclosed at investment. RD interest is taxable; report in ITR as applicable.",

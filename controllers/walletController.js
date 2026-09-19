@@ -6,6 +6,8 @@ const {
   creditWallet,
   currentFinancialYear,
   checkInvestAffordability,
+  maxInvestableFromBalance,
+  getCommissionPercent,
 } = require("../services/walletService");
 const { createDepositOrder, verifyPaymentSignature } = require("../services/razorpayService");
 const { encryptPii } = require("../utils/security");
@@ -15,6 +17,8 @@ async function getWallet(req, res) {
   console.log("[WALLET] get balance user:", req.user?.id);
   try {
     const wallet = await ensureWallet(req.user.id);
+    const balance = Number(wallet.balance);
+    const maxInvestable = maxInvestableFromBalance(balance);
     const [txs] = await pool.query(
       `SELECT id, direction, category, amount, balance_after, reference_type, reference_id,
               description, created_at
@@ -29,14 +33,20 @@ async function getWallet(req, res) {
       success: true,
       message: "Wallet fetched successfully",
       data: {
-        balance: Number(wallet.balance),
+        balance,
+        wallet_balance: balance,
         currency: wallet.currency,
         status: wallet.status,
+        admin_fee_percent: getCommissionPercent(),
+        max_investable_from_wallet: maxInvestable,
         recent_transactions: txs,
         invest_flow: {
-          step_1: "GET /api/wallet/can-invest?type=fd|rd&amount=...",
-          step_2_if_balance: "POST /api/fd or POST /api/market/rd (deduct wallet)",
-          step_2_if_no_balance: "Show dummy payment gateway → pay shortfall → retry invest",
+          step_1_add_money:
+            "POST /api/wallet/deposit/* or POST /api/payments/dummy/create { purpose: wallet_deposit } — credits wallet only",
+          step_2_check: "GET /api/wallet/can-invest?type=fd|rd&amount=...",
+          step_3_invest:
+            "POST /api/fd or POST /api/market/rd — deducts from wallet. Use invest_all=true to use full wallet (balance → 0).",
+          note: "Payment never auto-invests. Wallet shows 0 after investing all cash (principal + fee).",
         },
         regulatory_note:
           "Wallet is a prepaid balance for FD/RD investments on Money Trend. For bank demos use Dummy Payment Gateway (POST /api/payments/dummy/*) with test card numbers. Live deposits may use Razorpay when configured. Withdrawals credit your registered bank account after admin verification.",

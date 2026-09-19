@@ -1,7 +1,7 @@
 const pool = require("../config/db");
 const { getTicker } = require("./fdRdRateService");
 const { listMarketBanks, tenureLabelToMonths } = require("./marketBankService");
-const { getBalance, ensureWallet } = require("./walletService");
+const { getBalance, ensureWallet, checkInvestAffordability } = require("./walletService");
 const { getLatestInsights } = require("./articleService");
 const { resolveBankLogo } = require("./banks/bankLogos");
 
@@ -193,7 +193,18 @@ async function getCompareUserContext(userId, { amount, productType } = {}) {
   await ensureWallet(userId);
   const walletBalance = await getBalance(userId);
   const kycVerified = users[0].kyc_status === "verified";
-  const canInvest = kycVerified && walletBalance >= investAmount;
+  const product = String(productType || "FD").toUpperCase() === "RD" ? "RD" : "FD";
+
+  let afford = null;
+  let canInvest = false;
+  if (kycVerified && investAmount > 0) {
+    afford = await checkInvestAffordability(userId, investAmount, product);
+    canInvest = afford.can_pay_from_wallet;
+  } else if (kycVerified && investAmount <= 0) {
+    canInvest = walletBalance > 0;
+  }
+
+  const shortfall = afford ? afford.shortfall : Math.max(0, investAmount - walletBalance);
 
   return {
     is_logged_in: true,
@@ -203,15 +214,21 @@ async function getCompareUserContext(userId, { amount, productType } = {}) {
     kyc_verified: kycVerified,
     wallet_balance: Math.round(walletBalance * 100) / 100,
     investment_amount: investAmount,
+    admin_fee_percent: afford?.admin_fee_percent ?? null,
+    admin_fee: afford?.admin_fee ?? null,
+    required_total: afford?.required_total ?? null,
+    max_investable_from_wallet: afford?.max_investable_from_wallet ?? null,
     can_invest: canInvest,
     show_invest_buttons: true,
     invest_requires_login: false,
     message: !kycVerified
       ? "Complete KYC to invest"
       : !canInvest
-        ? `Add ₹${Math.max(0, investAmount - walletBalance).toLocaleString("en-IN")} to wallet to invest`
-        : `Ready to invest in ${productType}`,
+        ? `Add ₹${Number(shortfall).toLocaleString("en-IN")} to wallet, then press Invest to deduct from wallet`
+        : `Ready to invest — amount will be deducted from wallet`,
     login_required_for_invest: false,
+    flow_note:
+      "Add money → wallet only. Press Invest → deduct from wallet. After investing all (incl. fee), wallet shows 0.",
   };
 }
 

@@ -207,9 +207,9 @@ async function createDummyPayment({
         (safePurpose === "cibil_report"
           ? "CIBIL / credit report download fee (demo)"
           : safePurpose === "fd_invest"
-            ? "FD investment payment (demo)"
+            ? "Wallet top-up for FD (demo) — invest separately"
             : safePurpose === "rd_invest"
-              ? "RD investment payment (demo)"
+              ? "Wallet top-up for RD (demo) — invest separately"
               : "Wallet deposit (demo)"),
       meta: JSON.stringify(meta || {}),
     }
@@ -244,31 +244,37 @@ async function fulfillPayment(row, { paymentId, authCode, cardMeta }) {
 
   if (row.purpose === "wallet_deposit" || row.purpose === "fd_invest" || row.purpose === "rd_invest") {
     await ensureWallet(row.user_id);
+    // Payment NEVER creates an FD/RD — it only credits the wallet.
+    // User must call POST /api/fd or POST /api/market/rd to invest (debit wallet).
     const credit = await creditWallet({
       userId: row.user_id,
       amount: row.amount,
-      category: "dummy_payment",
+      category: "wallet_deposit",
       referenceType: "dummy_payment",
       referenceId: row.id,
-      description: `Dummy gateway credit for ${row.purpose} (${paymentId})`,
+      description: `Wallet top-up via dummy payment (${row.purpose}) — not invested yet`,
       meta: {
         order_id: row.order_id,
         payment_id: paymentId,
         purpose: row.purpose,
         card_last4: cardMeta.last4,
+        invested: false,
+        note: "Funds sit in wallet until user presses Invest",
       },
     });
     fulfillment = {
-      type: row.purpose,
+      type: "wallet_credit_only",
+      purpose: row.purpose,
+      invested: false,
       wallet_credited: Number(row.amount),
       wallet_balance: credit.balance,
       wallet_transaction_id: credit.transaction_id,
+      message:
+        "Money added to wallet only. It is NOT invested yet. Call the invest API to deduct from wallet.",
       next_step:
-        row.purpose === "fd_invest"
-          ? "Call POST /api/fd with FD details (wallet already funded)"
-          : row.purpose === "rd_invest"
-            ? "Call POST /api/market/rd with RD details (wallet already funded)"
-            : "Wallet balance updated",
+        row.purpose === "rd_invest" || row.purpose === "wallet_deposit"
+          ? "Retry invest: POST /api/fd or POST /api/market/rd (deducts wallet)"
+          : "Retry invest: POST /api/fd (deducts wallet)",
     };
   } else if (row.purpose === "cibil_report") {
     fulfillment = {

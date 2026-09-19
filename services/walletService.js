@@ -10,6 +10,31 @@ function getCommissionPercent() {
   return pct;
 }
 
+/** Max principal that can be invested so wallet balance becomes ~0 after fee. */
+function maxInvestableFromBalance(walletBalance) {
+  const balance = roundMoney(walletBalance);
+  const commissionPct = getCommissionPercent();
+  if (balance <= 0) return 0;
+  const principal = roundMoney(balance / (1 + commissionPct / 100));
+  // Ensure principal + fee never exceeds balance due to rounding
+  const fee = roundMoney((principal * commissionPct) / 100);
+  if (roundMoney(principal + fee) > balance) {
+    return roundMoney(Math.max(0, principal - 0.01));
+  }
+  return principal;
+}
+
+function feeForPrincipal(principal) {
+  const p = roundMoney(principal);
+  const commissionPct = getCommissionPercent();
+  return {
+    principal: p,
+    commission_percent: commissionPct,
+    admin_fee: roundMoney((p * commissionPct) / 100),
+    required_total: roundMoney(p + (p * commissionPct) / 100),
+  };
+}
+
 async function ensureWallet(userId, connection = pool) {
   const [rows] = await connection.query(
     `SELECT id, user_id, balance, currency, status FROM wallets WHERE user_id = :userId LIMIT 1`,
@@ -347,8 +372,8 @@ function currentFinancialYear(date = new Date()) {
 
 /**
  * Wallet-first invest check for frontend:
- * if balance covers principal + fee → pay from wallet;
- * else show dummy payment gateway for the shortfall.
+ * Deposit/pay → credit wallet only.
+ * Invest endpoint → debit wallet (principal + fee).
  */
 async function checkInvestAffordability(userId, investAmount, productType = "FD") {
   const principal = roundMoney(investAmount);
@@ -361,6 +386,7 @@ async function checkInvestAffordability(userId, investAmount, productType = "FD"
   const purpose = String(productType || "FD").toUpperCase() === "RD" ? "rd_invest" : "fd_invest";
   const investEndpoint =
     purpose === "rd_invest" ? "POST /api/market/rd" : "POST /api/fd";
+  const maxInvestable = maxInvestableFromBalance(balance);
 
   return {
     product_type: String(productType || "FD").toUpperCase() === "RD" ? "RD" : "FD",
@@ -372,21 +398,27 @@ async function checkInvestAffordability(userId, investAmount, productType = "FD"
     shortfall,
     can_pay_from_wallet: canPayFromWallet,
     show_payment_gateway: !canPayFromWallet,
+    /** Use this amount with invest_all / as principal to leave wallet at ~0 */
+    max_investable_from_wallet: maxInvestable,
+    wallet_will_be_zero_if_invest_max: maxInvestable > 0,
     flow: canPayFromWallet
-      ? "Use wallet — call invest endpoint directly (no payment gateway)"
-      : "Insufficient wallet — show dummy payment gateway, then retry invest",
+      ? "Wallet has enough — call invest endpoint (money is deducted from wallet, not from a new payment)"
+      : "Wallet shortfall — pay via dummy gateway to CREDIT wallet only, then call invest again to DEDUCT",
     payment:
       canPayFromWallet
         ? null
         : {
             gateway: "dummy",
-            purpose,
+            purpose: "wallet_deposit",
+            /** Prefer wallet_deposit; fd_invest/rd_invest aliases also only credit wallet */
+            purpose_aliases: [purpose],
             amount: shortfall,
             currency: "INR",
             create: "POST /api/payments/dummy/create",
             pay: "POST /api/payments/dummy/pay",
-            body_create: { purpose, amount: shortfall },
-            demo_note: "Pay shortfall with dummy card; wallet is credited, then invest again",
+            body_create: { purpose: "wallet_deposit", amount: shortfall },
+            demo_note:
+              "Payment only adds money to wallet. Investment happens only when you call the invest API again.",
           },
     invest_endpoint: investEndpoint,
   };
@@ -395,6 +427,8 @@ async function checkInvestAffordability(userId, investAmount, productType = "FD"
 module.exports = {
   roundMoney,
   getCommissionPercent,
+  maxInvestableFromBalance,
+  feeForPrincipal,
   ensureWallet,
   getBalance,
   creditWallet,

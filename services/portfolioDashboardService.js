@@ -312,18 +312,22 @@ async function buildPortfolioDashboard(userId) {
 
   return {
     summary: {
-      current_balance: portfolioValue,
-      current_balance_display: `₹${portfolioValue.toLocaleString("en-IN")}`,
+      /** Cash in wallet only — shows 0 after investing all funds */
+      current_balance: walletBalance,
+      current_balance_display: `₹${walletBalance.toLocaleString("en-IN")}`,
+      wallet_balance: walletBalance,
+      wallet_balance_display: `₹${walletBalance.toLocaleString("en-IN")}`,
       invested: investedTotal,
       invested_display: `₹${investedTotal.toLocaleString("en-IN")}`,
       active_fds: fds.length,
       active_rds: rds.length,
-      wallet_balance: walletBalance,
       total_fd_invested: fdInvested,
       total_rd_committed: rdInvested,
       total_fd_maturity_value: fdMaturity,
       total_rd_maturity_value: rdMaturity,
+      /** Wallet cash + FD/RD maturity values (not the wallet alone) */
       total_portfolio_value: portfolioValue,
+      total_portfolio_value_display: `₹${portfolioValue.toLocaleString("en-IN")}`,
     },
     credit_score: creditScore,
     /** Pie chart — FD / RD / Wallet mix */
