@@ -91,6 +91,11 @@ const {
   adminEquifaxCdsStatus,
 } = require("../controllers/creditCheckController");
 const {
+  adminListGoals,
+  adminListUserGoals,
+  adminGetGoal,
+} = require("../controllers/goalController");
+const {
   adminListTickets,
   adminGetTicket,
   adminUpdateTicketStatus,
@@ -174,6 +179,9 @@ router.get("/users/:id", getUserById);
 router.patch("/users/:id/kyc-status", updateUserKycStatus);
 
 router.get("/users/:id/bank-account", getUserBankAccountAdmin);
+router.get("/users/:id/goals", adminListUserGoals);
+router.get("/goals", adminListGoals);
+router.get("/goals/:id", adminGetGoal);
 
 router.get("/withdrawals", listWithdrawals);
 router.patch("/withdrawals/:id", processWithdrawal);

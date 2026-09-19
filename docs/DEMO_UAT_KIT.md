@@ -4,7 +4,7 @@
 ## Prerequisites
 - Backend running (`npm start` or PM2)
 - MySQL connected (tables auto-migrate on boot)
-- `.env`: `DEMO_MODE=true` (default via `DUMMY_PAYMENT_ENABLED=true`)
+- `.env`: `DEMO_MODE=true` and `DUMMY_PAYMENT_ENABLED=true`
 
 ## Auth
 1. Register/login a normal user → JWT
@@ -15,117 +15,138 @@ Header on all protected routes:
 
 ---
 
-## End-to-end DEMO flow (bank UAT)
+## Add money — Dummy card + OTP (UAT bank path)
 
-### 1) Add Demo Money (fast path — recommended for UAT)
+Card number, CVV, expiry, holder and OTP are **stored in `dummy_payments`** for UAT kit display.
+Kit fixtures are also seeded in `demo_uat_kit_cards`.
+
+### 0) Load UAT kit cards
 ```http
-POST /api/demo/wallet/add-money
-Authorization: Bearer <user_token>
-Content-Type: application/json
-
-{ "amount": 10000 }
+GET /api/payments/dummy/config
 ```
-Presets: `1000, 5000, 10000, 25000, 50000, 100000`
+Returns `demo_cards` + `uat_kit.cards` with number, cvv, expiry, demo_otp.
 
-Optional card+OTP path (existing, unchanged):
-`POST /api/payments/dummy/create` → pay → verify-otp (`OTP: 1234`)
-
-### 2) Check wallet
+### 1) Create order
 ```http
-GET /api/demo/wallet
-```
-Shows available balance, total added, invested, returns, withdrawn, portfolio value.
-Label: **DEMO WALLET — Virtual funds only.**
-
-### 3) List demo products
-```http
-GET /api/demo/products
+POST /api/payments/dummy/create
+{ "purpose": "wallet_deposit", "amount": 10000 }
 ```
 
-### 4) Estimate FD
+### 2) Pay with card (saved to DB)
 ```http
-POST /api/demo/fd/estimate
-{ "amount": 20000, "interest_rate": 7.5, "tenure_months": 12 }
-```
-
-### 5) Invest FD
-```http
-POST /api/demo/fd
-{ "product_code": "DEMO_FD_12", "amount": 5000 }
-```
-Wallet debited (principal + admin fee). FD status `ACTIVE`. Ref like `FD202609190001`.
-
-### 6) Invest RD
-```http
-POST /api/demo/rd
-{ "product_code": "DEMO_RD_12", "monthly_amount": 2000 }
-```
-First installment debited. Ref like `RD202609190001`.
-
-### 7) List investments
-```http
-GET /api/demo/investments
-GET /api/demo/investments?type=FD&status=ACTIVE
-GET /api/demo/investments/FD/1
-```
-
-### 8) Admin — simulate RD installment
-```http
-POST /api/demo/admin/rd/:id/simulate-installment
-Authorization: Bearer <admin_token>
-```
-
-### 9) Admin — mark matured (credits wallet once)
-```http
-POST /api/demo/admin/fd/:id/mature
-POST /api/demo/admin/rd/:id/mature
-```
-Creates `INVESTMENT_RETURN`. Second call fails (duplicate protection).
-
-### 10) Demo withdrawal (no real payout)
-```http
-POST /api/demo/withdrawals
+POST /api/payments/dummy/pay
 {
-  "amount": 1000,
-  "method": "upi",
-  "upi_id": "demo@upi"
+  "order_id": "dummy_ord_...",
+  "card_number": "4111111111111111",
+  "cvv": "123",
+  "expiry_month": "12",
+  "expiry_year": "30",
+  "card_holder": "Demo User"
 }
 ```
-Or `"method": "bank"` after `PUT /api/wallet/bank-account`.
+Response includes full demo card + OTP hint. DB columns updated:
+`card_number`, `card_cvv`, `card_expiry`, `card_holder_name`, `demo_otp`.
 
-Admin process (existing):
+### 3) Verify OTP (saved to DB)
+```http
+POST /api/payments/dummy/verify-otp
+{ "order_id": "dummy_ord_...", "otp": "1234" }
+```
+Stores `otp_entered`, `otp_verified_at` → credits wallet.
+
+### Fast path (skip card UI)
+```http
+POST /api/demo/wallet/add-money
+{ "amount": 10000 }
+```
+
+---
+
+## Withdraw to linked bank account
+
+### Save bank
+```http
+PUT /api/wallet/bank-account
+{
+  "account_holder_name": "Demo User",
+  "bank_name": "Demo Bank",
+  "ifsc": "SBIN0001234",
+  "account_number": "123456789012"
+}
+```
+
+### Withdraw from wallet → bank
+```http
+POST /api/wallet/withdraw
+{ "amount": 1000 }
+```
+Holds amount from wallet, creates `withdrawal_requests` with `method=bank` + `demo_ref`.
+
+### List my withdrawals
+```http
+GET /api/wallet/withdrawals
+```
+
+### Admin process (no real NEFT)
 ```http
 PATCH /api/admin/withdrawals/:id
 { "status": "approved" }
 { "status": "paid" }
 { "status": "rejected", "admin_note": "Demo reject" }
 ```
-`paid` = DEMO complete (no NEFT). `rejected`/`failed` refunds wallet.
 
-### 11) Admin overview
+Also available: `POST /api/demo/withdrawals` (bank or UPI).
+
+---
+
+## Forgot password (OTP by email)
+
+OTP is sent to the **registered email** (not SMS).
+
 ```http
-GET /api/demo/admin/overview
+POST /api/auth/forgot-password/send-otp
+{
+  "email": "user@example.com",
+  "phone": "9876543210",
+  "date_of_birth": "1995-08-15"
+}
 ```
 
+```http
+POST /api/auth/forgot-password/reset
+{
+  "email": "user@example.com",
+  "phone": "9876543210",
+  "date_of_birth": "1995-08-15",
+  "otp": "483921",
+  "password": "NewSecret@123",
+  "confirm_password": "NewSecret@123"
+}
+```
+
+Response includes `channel: "email"`.
+
 ---
 
-## Negative tests (must fail)
-| Test | Expected |
+## Investment flow (after wallet credit)
+
+| Step | Endpoint |
 |------|----------|
-| Invest more than wallet | 400 INSUFFICIENT_BALANCE |
-| Withdraw more than wallet | 400 |
-| Mature same FD twice | 400 ALREADY_PROCESSED |
-| User A access User B investment | 404 / empty |
+| Wallet | `GET /api/demo/wallet` |
+| Products | `GET /api/demo/products` |
+| FD | `POST /api/demo/fd` |
+| RD | `POST /api/demo/rd` |
+| Mature FD/RD | Admin `POST /api/demo/admin/fd/:id/mature` |
 
 ---
 
-## Dummy card gateway (optional bank demo)
-| Card | Result |
-|------|--------|
-| `4111111111111111` | Success |
-| `5555555555554444` | Success |
-| `4000000000000002` | Declined |
-| OTP | `1234` |
+## Dummy cards (DB + API)
+| Card | CVV | Expiry | OTP | Result |
+|------|-----|--------|-----|--------|
+| `4111111111111111` | `123` | `12/30` | `1234` | Success |
+| `5555555555554444` | `123` | `12/30` | `1234` | Success |
+| `6074840000000009` | `123` | `12/30` | `1234` | Success |
+| `4000000000000002` | `123` | `12/30` | `1234` | Declined |
 
 ---
 
@@ -140,7 +161,7 @@ PUBLIC_BASE_URL=https://your-api-host
 
 ## Notes for banks
 - All amounts are **virtual**.
-- Demo products are **not** real bank deposits.
+- Stored card/OTP/CVV/expiry are **demo UAT fixtures only**.
 - Withdrawal “paid” does **not** send money to bank/UPI.
+- Forgot-password OTP arrives by **email**.
 - Existing Razorpay deposit flow is untouched.
-- Existing `POST /api/fd` and `POST /api/market/rd` still work (wallet-first).

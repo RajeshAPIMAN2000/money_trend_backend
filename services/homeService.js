@@ -317,6 +317,14 @@ async function getUserDashboard(userId) {
   await ensureWallet(userId);
   const walletBalance = await getBalance(userId);
 
+  let goalPayload = { items: [], summary: null, market: null };
+  try {
+    const { getGoalsForHome } = require("./goalService");
+    goalPayload = await getGoalsForHome(userId);
+  } catch (_e) {
+    goalPayload = { items: [], summary: null, market: null };
+  }
+
   const [fds] = await pool.query(
     `SELECT principal_amount, maturity_amount FROM portfolio_fds
      WHERE user_id = :userId AND status = 'active'`,
@@ -384,8 +392,9 @@ async function getUserDashboard(userId) {
       rd_invested: Math.round(rdInvested * 100) / 100,
       wallet_balance: cashValue,
     },
-    goals: [],
-    goals_note: "Goals module can be added later; returns empty list for now",
+    goals: goalPayload.items,
+    goals_summary: goalPayload.summary,
+    goals_market: goalPayload.market,
   };
 }
 

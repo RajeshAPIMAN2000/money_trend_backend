@@ -406,36 +406,52 @@ async function requestWithdrawal(req, res) {
     }
 
     const [banks] = await pool.query(
-      `SELECT id FROM user_bank_accounts WHERE user_id = :userId AND status = 'active' LIMIT 1`,
+      `SELECT id, account_holder_name, bank_name, ifsc_code, account_last4
+       FROM user_bank_accounts WHERE user_id = :userId AND status = 'active' LIMIT 1`,
       { userId: req.user.id }
     );
     if (!banks.length) {
       return res.status(400).json({
         success: false,
-        message: "Add bank account in profile/KYC before withdrawing",
+        message: "Add bank account first (PUT /api/wallet/bank-account) before withdrawing",
+        code: "BANK_REQUIRED",
+        next_step: "PUT /api/wallet/bank-account",
       });
     }
 
+    const bank = banks[0];
     const { debitWallet } = require("../services/walletService");
     const tx = await debitWallet({
       userId: req.user.id,
       amount,
       category: "withdrawal_hold",
       referenceType: "withdrawal_request",
-      description: "Withdrawal requested — pending admin bank transfer",
+      description: "Withdrawal requested — pending transfer to linked bank account",
+      meta: {
+        method: "bank",
+        bank_account_id: bank.id,
+        bank_name: bank.bank_name,
+        account_last4: bank.account_last4,
+      },
     });
 
     const [ins] = await pool.query(
       `INSERT INTO withdrawal_requests
-        (user_id, bank_account_id, amount, status, wallet_transaction_id)
+        (user_id, bank_account_id, amount, status, method, wallet_transaction_id)
        VALUES
-        (:userId, :bankId, :amount, 'pending', :txId)`,
+        (:userId, :bankId, :amount, 'pending', 'bank', :txId)`,
       {
         userId: req.user.id,
-        bankId: banks[0].id,
+        bankId: bank.id,
         amount,
         txId: tx.transaction_id,
       }
+    );
+
+    const demoRef = `DEMO-WD-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}${String(ins.insertId).padStart(4, "0")}`;
+    await pool.query(
+      `UPDATE withdrawal_requests SET demo_ref = :demoRef WHERE id = :id`,
+      { demoRef, id: ins.insertId }
     );
 
     await pool.query(
@@ -446,12 +462,21 @@ async function requestWithdrawal(req, res) {
     return res.status(201).json({
       success: true,
       message:
-        "Withdrawal requested. Admin will transfer to your registered bank account (Account No / IFSC).",
+        "Withdrawal request submitted to your linked bank account. Admin will process (demo — no real NEFT until live payout).",
       data: {
         withdrawal_id: ins.insertId,
+        demo_ref: demoRef,
         amount,
+        method: "bank",
         status: "pending",
         balance: tx.balance,
+        bank_account: {
+          account_holder_name: bank.account_holder_name,
+          bank_name: bank.bank_name,
+          ifsc_code: bank.ifsc_code,
+          account_number_masked: `XXXXXX${bank.account_last4}`,
+        },
+        note: "Amount is reserved from wallet. On admin reject/fail it is refunded.",
       },
     });
   } catch (error) {
@@ -460,6 +485,61 @@ async function requestWithdrawal(req, res) {
     return res.status(status).json({
       success: false,
       message: error.message || "Failed to request withdrawal",
+      code: error.code || undefined,
+      error: error.message,
+    });
+  }
+}
+
+async function listWithdrawals(req, res) {
+  try {
+    const status = req.query.status ? String(req.query.status).toLowerCase() : null;
+    let sql = `
+      SELECT wr.id, wr.amount, wr.status, wr.method, wr.upi_id, wr.demo_ref, wr.admin_note,
+             wr.created_at, wr.processed_at,
+             b.bank_name, b.account_holder_name, b.ifsc_code, b.account_last4
+      FROM withdrawal_requests wr
+      LEFT JOIN user_bank_accounts b ON b.id = wr.bank_account_id
+      WHERE wr.user_id = :userId`;
+    const params = { userId: req.user.id };
+    if (status) {
+      sql += ` AND wr.status = :status`;
+      params.status = status;
+    }
+    sql += ` ORDER BY wr.id DESC LIMIT 50`;
+
+    const [rows] = await pool.query(sql, params);
+    return res.json({
+      success: true,
+      message: "Withdrawal requests",
+      data: {
+        count: rows.length,
+        withdrawals: rows.map((w) => ({
+          withdrawal_id: w.id,
+          demo_ref: w.demo_ref || `DEMO-WD-${String(w.id).padStart(8, "0")}`,
+          amount: Number(w.amount),
+          method: w.method || "bank",
+          status: String(w.status).toUpperCase(),
+          upi_id: w.upi_id,
+          admin_note: w.admin_note,
+          created_at: w.created_at,
+          processed_at: w.processed_at,
+          bank_account: w.bank_name
+            ? {
+                account_holder_name: w.account_holder_name,
+                bank_name: w.bank_name,
+                ifsc_code: w.ifsc_code,
+                account_number_masked: w.account_last4 ? `XXXXXX${w.account_last4}` : null,
+              }
+            : null,
+        })),
+      },
+    });
+  } catch (error) {
+    console.error("[WALLET] list withdrawals error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to list withdrawals",
       error: error.message,
     });
   }
@@ -511,5 +591,6 @@ module.exports = {
   upsertBankAccount,
   getBankAccount,
   requestWithdrawal,
+  listWithdrawals,
   getTaxReport,
 };

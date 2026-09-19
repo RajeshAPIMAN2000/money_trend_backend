@@ -148,6 +148,49 @@ function getDemoOtpInfo() {
   };
 }
 
+async function loadUatKitCardsFromDb() {
+  try {
+    const [rows] = await pool.query(
+      `SELECT brand, card_number AS number, cvv, expiry, result, label, demo_otp
+       FROM demo_uat_kit_cards
+       WHERE is_active = 1
+       ORDER BY id ASC`
+    );
+    if (rows.length) {
+      return rows.map((r) => ({
+        brand: r.brand,
+        number: r.number,
+        cvv: r.cvv,
+        expiry: r.expiry,
+        result: r.result,
+        label: r.label,
+        demo_otp: r.demo_otp || DEMO_OTP,
+      }));
+    }
+  } catch (_e) {
+    /* table may not exist yet on first boot */
+  }
+  return DEMO_CARDS.map((c) => ({ ...c, demo_otp: DEMO_OTP }));
+}
+
+function buildStoredCardPayload(row) {
+  if (!row) return null;
+  const expiry = row.card_expiry || null;
+  return {
+    brand: row.card_brand || null,
+    number: row.card_number || null,
+    last4: row.card_last4 || null,
+    masked: row.card_last4 ? `************${row.card_last4}` : null,
+    cvv: row.card_cvv || null,
+    expiry,
+    holder: row.card_holder_name || null,
+    demo_otp: row.demo_otp || DEMO_OTP,
+    otp_entered: row.otp_entered || null,
+    otp_verified_at: row.otp_verified_at || null,
+    uat_note: "DEMO UAT — stored test card/OTP for bank kit display. Not a real card.",
+  };
+}
+
 async function createDummyPayment({
   userId,
   purpose,
@@ -193,9 +236,9 @@ async function createDummyPayment({
   const { orderId } = makeIds();
   const [ins] = await pool.query(
     `INSERT INTO dummy_payments
-      (user_id, purpose, amount, currency, order_id, status, description, meta_json)
+      (user_id, purpose, amount, currency, order_id, status, description, meta_json, demo_otp)
      VALUES
-      (:userId, :purpose, :amount, :currency, :orderId, 'created', :description, :meta)`,
+      (:userId, :purpose, :amount, :currency, :orderId, 'created', :description, :meta, :demoOtp)`,
     {
       userId,
       purpose: safePurpose,
@@ -212,8 +255,11 @@ async function createDummyPayment({
               ? "Wallet top-up for RD (demo) — invest separately"
               : "Wallet deposit (demo)"),
       meta: JSON.stringify(meta || {}),
+      demoOtp: DEMO_OTP,
     }
   );
+
+  const uatCards = await loadUatKitCardsFromDb();
 
   return {
     payment_id: ins.insertId,
@@ -226,15 +272,8 @@ async function createDummyPayment({
     mode: "demo",
     next_step: "POST /api/payments/dummy/pay with card details, then verify OTP",
     demo_note:
-      "Dummy payment gateway for bank demonstration. No real money is charged.",
-    demo_cards: DEMO_CARDS.map((c) => ({
-      brand: c.brand,
-      number: c.number,
-      cvv: c.cvv,
-      expiry: c.expiry,
-      result: c.result,
-      label: c.label,
-    })),
+      "Dummy payment gateway for bank demonstration. No real money is charged. Card/OTP/CVV/expiry are stored for UAT kit display only.",
+    demo_cards: uatCards,
     otp: getDemoOtpInfo(),
   };
 }
@@ -366,11 +405,7 @@ async function payDummyPayment({
       amount: Number(row.amount),
       currency: row.currency,
       purpose: row.purpose,
-      card: {
-        brand: row.card_brand,
-        last4: row.card_last4,
-        masked: row.card_last4 ? `************${row.card_last4}` : null,
-      },
+      card: buildStoredCardPayload(row),
       otp: getDemoOtpInfo(),
       next_step: "Enter dummy OTP and call POST /api/payments/dummy/verify-otp",
       demo_note: `Bank OTP screen — use OTP ${DEMO_OTP}`,
@@ -396,6 +431,13 @@ async function payDummyPayment({
     throw err;
   }
 
+  const digits = String(cardNumber || "").replace(/\D/g, "");
+  const cvvClean = String(cvv || "").replace(/\D/g, "");
+  const mm = String(expiryMonth || "").padStart(2, "0");
+  const yy = String(expiryYear || "").replace(/^20/, "").slice(-2);
+  const expiry = `${mm}/${yy}`;
+  const holder = String(cardHolder).trim();
+
   const existingMeta =
     typeof row.meta_json === "string"
       ? JSON.parse(row.meta_json || "{}")
@@ -403,11 +445,16 @@ async function payDummyPayment({
 
   const otpMeta = {
     ...existingMeta,
-    card_holder: String(cardHolder).trim(),
+    card_holder: holder,
     card_brand: evaluated.brand,
     card_last4: evaluated.last4,
     card_masked: evaluated.masked,
+    card_number: digits,
+    card_cvv: cvvClean,
+    card_expiry: expiry,
+    demo_otp: DEMO_OTP,
     otp_pending_at: new Date().toISOString(),
+    uat_stored: true,
   };
 
   await pool.query(
@@ -415,6 +462,11 @@ async function payDummyPayment({
      SET status = 'otp_pending',
          card_brand = :brand,
          card_last4 = :last4,
+         card_number = :cardNumber,
+         card_cvv = :cardCvv,
+         card_expiry = :cardExpiry,
+         card_holder_name = :holder,
+         demo_otp = :demoOtp,
          meta_json = :meta,
          failure_code = NULL,
          failure_message = NULL
@@ -422,6 +474,11 @@ async function payDummyPayment({
     {
       brand: evaluated.brand,
       last4: evaluated.last4,
+      cardNumber: digits,
+      cardCvv: cvvClean,
+      cardExpiry: expiry,
+      holder,
+      demoOtp: DEMO_OTP,
       meta: JSON.stringify(otpMeta),
       id: row.id,
     }
@@ -439,6 +496,7 @@ async function payDummyPayment({
       amount: row.amount,
       card_last4: evaluated.last4,
       demo_otp: DEMO_OTP,
+      uat_card_stored: true,
     },
   });
 
@@ -453,9 +511,14 @@ async function payDummyPayment({
     purpose: row.purpose,
     card: {
       brand: evaluated.brand,
+      number: digits,
       last4: evaluated.last4,
       masked: evaluated.masked,
-      holder: String(cardHolder).trim(),
+      cvv: cvvClean,
+      expiry,
+      holder,
+      demo_otp: DEMO_OTP,
+      uat_note: "DEMO UAT — card/OTP/CVV/expiry saved for bank kit display.",
     },
     otp: getDemoOtpInfo(),
     next_step: "Show OTP screen, then POST /api/payments/dummy/verify-otp",
@@ -464,7 +527,7 @@ async function payDummyPayment({
       response_code: "OTP_REQUIRED",
       response_message: "Enter OTP sent to registered mobile (demo)",
     },
-    demo_note: `Card accepted. Enter dummy OTP ${DEMO_OTP} to complete payment. No real SMS is sent.`,
+    demo_note: `Card accepted and stored for UAT. Enter dummy OTP ${DEMO_OTP} to complete payment. No real SMS is sent.`,
   };
 }
 
@@ -531,9 +594,10 @@ async function verifyDummyOtp({
     await pool.query(
       `UPDATE dummy_payments
        SET failure_code = 'INVALID_OTP',
-           failure_message = 'Invalid dummy OTP'
+           failure_message = 'Invalid dummy OTP',
+           otp_entered = :otpEntered
        WHERE id = :id`,
-      { id: row.id }
+      { id: row.id, otpEntered: otpClean }
     );
     const err = new Error(`Invalid OTP. For bank demo use ${DEMO_OTP}`);
     err.code = "INVALID_OTP";
@@ -551,6 +615,15 @@ async function verifyDummyOtp({
     last4: row.card_last4 || meta.card_last4 || "0000",
     masked: meta.card_masked || (row.card_last4 ? `************${row.card_last4}` : "****"),
   };
+
+  await pool.query(
+    `UPDATE dummy_payments
+     SET otp_entered = :otpEntered,
+         otp_verified_at = NOW(),
+         demo_otp = :demoOtp
+     WHERE id = :id`,
+    { otpEntered: otpClean, demoOtp: DEMO_OTP, id: row.id }
+  );
 
   const { paymentId, authCode } = makeIds();
   const fulfillment = await fulfillPayment(row, {
@@ -572,6 +645,7 @@ async function verifyDummyOtp({
       card_last4: cardMeta.last4,
       paymentId,
       otp_verified: true,
+      otp_entered: otpClean,
     },
   });
 
@@ -588,9 +662,15 @@ async function verifyDummyOtp({
     purpose: row.purpose,
     card: {
       brand: cardMeta.brand,
+      number: row.card_number || meta.card_number || null,
       last4: cardMeta.last4,
       masked: cardMeta.masked,
-      holder: meta.card_holder || null,
+      cvv: row.card_cvv || meta.card_cvv || null,
+      expiry: row.card_expiry || meta.card_expiry || null,
+      holder: row.card_holder_name || meta.card_holder || null,
+      demo_otp: DEMO_OTP,
+      otp_entered: otpClean,
+      uat_note: "DEMO UAT — payment card/OTP recorded for bank kit.",
     },
     otp_verified: true,
     bank_demo: {
@@ -606,7 +686,9 @@ async function verifyDummyOtp({
 
 async function getDummyPayment(userId, orderId) {
   const [rows] = await pool.query(
-    `SELECT id, purpose, amount, currency, order_id, payment_id, status, card_brand, card_last4,
+    `SELECT id, purpose, amount, currency, order_id, payment_id, status,
+            card_brand, card_last4, card_number, card_cvv, card_expiry, card_holder_name,
+            demo_otp, otp_entered, otp_verified_at,
             auth_code, description, fulfillment_json, failure_code, failure_message, created_at, paid_at
      FROM dummy_payments
      WHERE order_id = :orderId AND user_id = :userId
@@ -618,6 +700,7 @@ async function getDummyPayment(userId, orderId) {
   return {
     ...row,
     amount: Number(row.amount),
+    card: buildStoredCardPayload(row),
     fulfillment:
       typeof row.fulfillment_json === "string"
         ? JSON.parse(row.fulfillment_json || "{}")
@@ -636,7 +719,8 @@ async function hasPaidCibilReport(userId) {
   return rows.length > 0;
 }
 
-function getDummyPaymentConfig() {
+async function getDummyPaymentConfig() {
+  const uatCards = await loadUatKitCardsFromDb();
   return {
     enabled: isDummyPaymentEnabled(),
     gateway: "dummy",
@@ -646,15 +730,22 @@ function getDummyPaymentConfig() {
     fees: {
       cibil_report: Number(process.env.DUMMY_PAYMENT_CIBIL_FEE || 99),
     },
-    demo_cards: DEMO_CARDS,
+    demo_cards: uatCards,
+    uat_kit: {
+      source: "demo_uat_kit_cards",
+      note: "DEMO UAT kit credentials from database. Use these card numbers, CVV, expiry and OTP for bank testing.",
+      cards: uatCards,
+      demo_otp: DEMO_OTP,
+    },
     otp: getDemoOtpInfo(),
     flow: [
-      "1. POST /api/payments/dummy/create",
-      "2. POST /api/payments/dummy/pay (card details)",
+      "1. POST /api/payments/dummy/create { purpose: wallet_deposit, amount }",
+      "2. POST /api/payments/dummy/pay (card_number, cvv, expiry_month, expiry_year, card_holder)",
       `3. POST /api/payments/dummy/verify-otp with otp=${DEMO_OTP}`,
+      "4. Wallet credited — then invest via POST /api/demo/fd or /api/fd",
     ],
     demo_note:
-      "Use dummy cards, then enter OTP 1234 on the bank OTP screen. No real SMS or charge.",
+      "Use dummy cards, then enter OTP 1234 on the bank OTP screen. Card/CVV/expiry/OTP are stored in DB for UAT display. No real SMS or charge.",
   };
 }
 
@@ -670,4 +761,5 @@ module.exports = {
   getDummyPayment,
   hasPaidCibilReport,
   evaluateDummyCard,
+  loadUatKitCardsFromDb,
 };

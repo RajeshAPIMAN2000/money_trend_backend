@@ -468,9 +468,9 @@ const options = {
       "/auth/forgot-password/send-otp": {
         post: {
           tags: ["Auth"],
-          summary: "Send forgot-password OTP via SMS",
+          summary: "Send forgot-password OTP via email",
           description:
-            "Step 1 — verify email, phone and date of birth, then send OTP to registered mobile.",
+            "Step 1 — verify email, phone and date of birth, then send a 6-digit OTP to the registered email address (not SMS).",
           requestBody: {
             required: true,
             content: {
@@ -478,8 +478,7 @@ const options = {
             },
           },
           responses: {
-            200: { description: "OTP sent for password reset" },
-            404: { description: "Account not found" },
+            200: { description: "OTP emailed for password reset (enumeration-safe response)" },
             429: { description: "Rate limited or cooldown" },
           },
         },
@@ -487,7 +486,8 @@ const options = {
       "/auth/forgot-password/resend-otp": {
         post: {
           tags: ["Auth"],
-          summary: "Resend forgot-password OTP via SMS",
+          summary: "Resend forgot-password OTP via email",
+          description: "Resends the password-reset OTP to the registered email.",
           requestBody: {
             required: true,
             content: {
@@ -495,8 +495,7 @@ const options = {
             },
           },
           responses: {
-            200: { description: "OTP resent" },
-            404: { description: "Account not found" },
+            200: { description: "OTP resent to email" },
             429: { description: "Rate limited or cooldown" },
           },
         },
@@ -504,9 +503,9 @@ const options = {
       "/auth/forgot-password/reset": {
         post: {
           tags: ["Auth"],
-          summary: "Reset password with OTP",
+          summary: "Reset password with email OTP",
           description:
-            "Step 2 — submit email, phone, date of birth, OTP and new password.",
+            "Step 2 — submit email, phone, date of birth, email OTP and new password.",
           requestBody: {
             required: true,
             content: {

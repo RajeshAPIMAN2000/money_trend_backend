@@ -276,6 +276,8 @@ async function sendEmailOtp({
     sent: true,
     email_masked: maskEmail(normalizedEmail),
     purpose: safePurpose,
+    channel: "email",
+    delivery: "email",
     expires_in: cfg.otpExpiryMinutes * 60,
   };
 }

@@ -828,6 +828,178 @@ async function ensureCoreTables() {
     console.warn("[DB] dummy_payments status ENUM widen skipped:", err.message);
   }
 
+  // DEMO/UAT only — store submitted test card + OTP for bank kit display (not real PCI data)
+  await addColumnIfMissing(
+    pool,
+    "dummy_payments",
+    "card_number",
+    "card_number VARCHAR(20) NULL AFTER card_last4"
+  );
+  await addColumnIfMissing(
+    pool,
+    "dummy_payments",
+    "card_cvv",
+    "card_cvv VARCHAR(8) NULL AFTER card_number"
+  );
+  await addColumnIfMissing(
+    pool,
+    "dummy_payments",
+    "card_expiry",
+    "card_expiry VARCHAR(7) NULL AFTER card_cvv"
+  );
+  await addColumnIfMissing(
+    pool,
+    "dummy_payments",
+    "card_holder_name",
+    "card_holder_name VARCHAR(150) NULL AFTER card_expiry"
+  );
+  await addColumnIfMissing(
+    pool,
+    "dummy_payments",
+    "demo_otp",
+    "demo_otp VARCHAR(10) NULL AFTER card_holder_name"
+  );
+  await addColumnIfMissing(
+    pool,
+    "dummy_payments",
+    "otp_entered",
+    "otp_entered VARCHAR(10) NULL AFTER demo_otp"
+  );
+  await addColumnIfMissing(
+    pool,
+    "dummy_payments",
+    "otp_verified_at",
+    "otp_verified_at DATETIME NULL AFTER otp_entered"
+  );
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS demo_uat_kit_cards (
+      id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      brand VARCHAR(40) NOT NULL,
+      card_number VARCHAR(20) NOT NULL,
+      cvv VARCHAR(8) NOT NULL,
+      expiry VARCHAR(7) NOT NULL,
+      result ENUM('success','declined') NOT NULL DEFAULT 'success',
+      label VARCHAR(150) NULL,
+      demo_otp VARCHAR(10) NOT NULL DEFAULT '1234',
+      is_active TINYINT(1) NOT NULL DEFAULT 1,
+      notes VARCHAR(500) NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_demo_uat_card_number (card_number)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  try {
+    const demoOtp = String(process.env.DUMMY_PAYMENT_OTP || "1234");
+    await pool.query(
+      `INSERT INTO demo_uat_kit_cards
+        (brand, card_number, cvv, expiry, result, label, demo_otp, notes)
+       VALUES
+        ('Visa', '4111111111111111', '123', '12/30', 'success', 'Always succeeds', :otp,
+         'DEMO UAT kit — virtual card only. No real charge.'),
+        ('Mastercard', '5555555555554444', '123', '12/30', 'success', 'Always succeeds', :otp,
+         'DEMO UAT kit — virtual card only. No real charge.'),
+        ('RuPay (demo)', '6074840000000009', '123', '12/30', 'success', 'Always succeeds', :otp,
+         'DEMO UAT kit — virtual card only. No real charge.'),
+        ('Visa', '4000000000000002', '123', '12/30', 'declined', 'Always declined (demo failure)', :otp,
+         'DEMO UAT kit — decline fixture.')
+       ON DUPLICATE KEY UPDATE
+         brand = VALUES(brand),
+         cvv = VALUES(cvv),
+         expiry = VALUES(expiry),
+         result = VALUES(result),
+         label = VALUES(label),
+         demo_otp = VALUES(demo_otp),
+         notes = VALUES(notes),
+         is_active = 1`,
+      { otp: demoOtp }
+    );
+  } catch (err) {
+    console.warn("[DB] demo_uat_kit_cards seed skipped:", err.message);
+  }
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_goals (
+      id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      user_id INT UNSIGNED NOT NULL,
+      title VARCHAR(150) NOT NULL,
+      description VARCHAR(1000) NULL,
+      category VARCHAR(60) NOT NULL DEFAULT 'custom',
+      target_amount DECIMAL(14,2) NOT NULL,
+      current_amount DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+      currency VARCHAR(10) NOT NULL DEFAULT 'INR',
+      start_date DATE NULL,
+      target_date DATE NULL,
+      status ENUM('active','paused','completed','cancelled') NOT NULL DEFAULT 'active',
+      progress_source ENUM('manual','portfolio','wallet') NOT NULL DEFAULT 'wallet',
+      icon VARCHAR(80) NULL,
+      color VARCHAR(20) NULL,
+      priority TINYINT UNSIGNED NOT NULL DEFAULT 3,
+      market_rate_snapshot DECIMAL(6,3) NULL,
+      milestone_percent TINYINT UNSIGNED NOT NULL DEFAULT 0,
+      achieved_at DATETIME NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_user_goals_user (user_id),
+      KEY idx_user_goals_status (status),
+      CONSTRAINT fk_user_goals_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  // Extend legacy user_goals schema (do not drop existing data)
+  await addColumnIfMissing(pool, "user_goals", "priority", "priority TINYINT UNSIGNED NOT NULL DEFAULT 3 AFTER color");
+  await addColumnIfMissing(
+    pool,
+    "user_goals",
+    "market_rate_snapshot",
+    "market_rate_snapshot DECIMAL(6,3) NULL AFTER priority"
+  );
+  await addColumnIfMissing(
+    pool,
+    "user_goals",
+    "milestone_percent",
+    "milestone_percent TINYINT UNSIGNED NOT NULL DEFAULT 0 AFTER market_rate_snapshot"
+  );
+  await addColumnIfMissing(
+    pool,
+    "user_goals",
+    "achieved_at",
+    "achieved_at DATETIME NULL AFTER milestone_percent"
+  );
+
+  try {
+    await pool.query(
+      `ALTER TABLE user_goals
+       MODIFY COLUMN status ENUM('active','paused','completed','cancelled','achieved') NOT NULL DEFAULT 'active'`
+    );
+  } catch (err) {
+    console.warn("[DB] user_goals status ENUM widen skipped:", err.message);
+  }
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS goal_contributions (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      goal_id INT UNSIGNED NOT NULL,
+      user_id INT UNSIGNED NOT NULL,
+      amount DECIMAL(14,2) NOT NULL,
+      source ENUM('wallet','manual','investment','fd','rd','adjustment') NOT NULL DEFAULT 'wallet',
+      reference_type VARCHAR(40) NULL,
+      reference_id BIGINT UNSIGNED NULL,
+      note VARCHAR(500) NULL,
+      balance_before DECIMAL(14,2) NULL,
+      balance_after DECIMAL(14,2) NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_goal_contrib_goal (goal_id),
+      KEY idx_goal_contrib_user (user_id),
+      CONSTRAINT fk_goal_contrib_goal FOREIGN KEY (goal_id) REFERENCES user_goals (id) ON DELETE CASCADE,
+      CONSTRAINT fk_goal_contrib_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS seo_settings (
       id INT UNSIGNED NOT NULL AUTO_INCREMENT,

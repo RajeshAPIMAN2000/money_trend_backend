@@ -7,12 +7,21 @@ const {
   hasPaidCibilReport,
 } = require("../services/dummyPaymentService");
 
-function getConfig(req, res) {
-  return res.json({
-    success: true,
-    message: "Dummy payment gateway config for bank demos",
-    data: getDummyPaymentConfig(),
-  });
+async function getConfig(req, res) {
+  try {
+    const data = await getDummyPaymentConfig();
+    return res.json({
+      success: true,
+      message: "Dummy payment gateway config for bank demos",
+      data,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Failed to load dummy payment config",
+      error: error.message,
+    });
+  }
 }
 
 async function createPayment(req, res) {

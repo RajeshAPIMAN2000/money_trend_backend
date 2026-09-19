@@ -235,8 +235,8 @@ async function sendForgotPasswordOtp(req, res) {
     if (!user) {
       return res.json({
         success: true,
-        message: "If the account details are valid, a verification code has been sent.",
-        data: { purpose: "PASSWORD_RESET" },
+        message: "If the account details are valid, a verification code has been sent to your email.",
+        data: { purpose: "PASSWORD_RESET", channel: "email", delivery: "email" },
       });
     }
 
@@ -251,8 +251,13 @@ async function sendForgotPasswordOtp(req, res) {
 
     return res.json({
       success: true,
-      message: "If the account details are valid, a verification code has been sent.",
-      data,
+      message: "If the account details are valid, a verification code has been sent to your email.",
+      data: {
+        ...data,
+        channel: "email",
+        delivery: "email",
+        hint: "Check your inbox (and spam) for the Money Trend password reset OTP.",
+      },
     });
   } catch (error) {
     return handleEmailOtpError(res, error, "Failed to send password reset OTP");

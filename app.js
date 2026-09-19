@@ -30,6 +30,7 @@ const equifaxRoutes = require("./routes/equifax");
 const paymentsRoutes = require("./routes/payments");
 const seoRoutes = require("./routes/seo");
 const demoRoutes = require("./routes/demo");
+const goalsRoutes = require("./routes/goals");
 const { serveSitemap, serveRobots } = require("./controllers/seoController");
 const {
   listBlogs,
@@ -86,6 +87,7 @@ function mountApiRoutes(basePath = "") {
   app.use(route("/payments"), paymentsRoutes);
   app.use(route("/seo"), seoRoutes);
   app.use(route("/demo"), demoRoutes);
+  app.use(route("/goals"), goalsRoutes);
   app.get(route("/health"), (_req, res) => {
     res.json(healthPayload());
   });
@@ -191,6 +193,7 @@ app.get(["/api", "/api/"], (_req, res) => {
       "/api/blogs",
       "/api/news",
       "/api/demo",
+      "/api/goals",
       "/api/banners",
     ],
     docs: "/api-docs",

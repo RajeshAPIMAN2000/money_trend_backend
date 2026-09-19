@@ -9,6 +9,7 @@ const {
   upsertBankAccount,
   getBankAccount,
   requestWithdrawal,
+  listWithdrawals,
   getTaxReport,
 } = require("../controllers/walletController");
 
@@ -28,6 +29,7 @@ router.put("/bank-account", upsertBankAccount);
 router.post("/bank-account", upsertBankAccount);
 
 router.post("/withdraw", requestWithdrawal);
+router.get("/withdrawals", listWithdrawals);
 
 router.get("/tax-report", getTaxReport);
 
