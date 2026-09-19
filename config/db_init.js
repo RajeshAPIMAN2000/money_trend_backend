@@ -230,6 +230,7 @@ async function ensureCoreTables() {
       maturity_amount DECIMAL(14,2) NOT NULL,
       notes VARCHAR(500) NULL,
       status ENUM('active', 'matured', 'closed') NOT NULL DEFAULT 'active',
+      installments_paid INT UNSIGNED NOT NULL DEFAULT 1,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       PRIMARY KEY (id),
@@ -237,6 +238,13 @@ async function ensureCoreTables() {
       CONSTRAINT fk_portfolio_rd_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
+
+  await addColumnIfMissing(
+    pool,
+    "portfolio_rds",
+    "installments_paid",
+    "installments_paid INT UNSIGNED NOT NULL DEFAULT 1 AFTER status"
+  );
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS wallets (
@@ -319,9 +327,12 @@ async function ensureCoreTables() {
     CREATE TABLE IF NOT EXISTS withdrawal_requests (
       id INT UNSIGNED NOT NULL AUTO_INCREMENT,
       user_id INT UNSIGNED NOT NULL,
-      bank_account_id INT UNSIGNED NOT NULL,
+      bank_account_id INT UNSIGNED NULL,
       amount DECIMAL(14,2) NOT NULL,
-      status ENUM('pending', 'approved', 'rejected', 'paid') NOT NULL DEFAULT 'pending',
+      status ENUM('pending', 'approved', 'rejected', 'paid', 'processing', 'failed') NOT NULL DEFAULT 'pending',
+      method ENUM('bank', 'upi') NOT NULL DEFAULT 'bank',
+      upi_id VARCHAR(150) NULL,
+      demo_ref VARCHAR(40) NULL,
       wallet_transaction_id BIGINT UNSIGNED NULL,
       admin_note VARCHAR(500) NULL,
       processed_by INT UNSIGNED NULL,
@@ -331,10 +342,45 @@ async function ensureCoreTables() {
       PRIMARY KEY (id),
       KEY idx_withdraw_user (user_id),
       KEY idx_withdraw_status (status),
-      CONSTRAINT fk_withdraw_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
-      CONSTRAINT fk_withdraw_bank FOREIGN KEY (bank_account_id) REFERENCES user_bank_accounts (id)
+      CONSTRAINT fk_withdraw_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
+
+  await addColumnIfMissing(
+    pool,
+    "withdrawal_requests",
+    "method",
+    "method ENUM('bank','upi') NOT NULL DEFAULT 'bank' AFTER amount"
+  );
+  await addColumnIfMissing(
+    pool,
+    "withdrawal_requests",
+    "upi_id",
+    "upi_id VARCHAR(150) NULL AFTER method"
+  );
+  await addColumnIfMissing(
+    pool,
+    "withdrawal_requests",
+    "demo_ref",
+    "demo_ref VARCHAR(40) NULL AFTER upi_id"
+  );
+  // Allow NULL bank_account_id for UPI withdrawals (existing DBs may have NOT NULL)
+  try {
+    await pool.query(
+      `ALTER TABLE withdrawal_requests MODIFY COLUMN bank_account_id INT UNSIGNED NULL`
+    );
+  } catch (e) {
+    console.warn("[DB] withdrawal bank_account_id nullable:", e.message);
+  }
+  try {
+    await pool.query(
+      `ALTER TABLE withdrawal_requests
+       MODIFY COLUMN status ENUM('pending','approved','rejected','paid','processing','failed')
+       NOT NULL DEFAULT 'pending'`
+    );
+  } catch (e) {
+    console.warn("[DB] withdrawal status enum migrate:", e.message);
+  }
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS admin_commissions (

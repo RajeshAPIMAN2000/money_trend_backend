@@ -597,10 +597,10 @@ async function processWithdrawal(req, res) {
     const status = String(req.body.status || "").trim().toLowerCase();
     const adminNote = String(req.body.admin_note || req.body.note || "").trim() || null;
 
-    if (!["approved", "rejected", "paid"].includes(status)) {
+    if (!["approved", "rejected", "paid", "processing", "failed"].includes(status)) {
       return res.status(400).json({
         success: false,
-        message: 'status must be "approved", "paid" or "rejected"',
+        message: 'status must be "approved", "paid", "processing", "failed" or "rejected"',
       });
     }
 
@@ -613,14 +613,14 @@ async function processWithdrawal(req, res) {
     }
 
     const w = rows[0];
-    if (["paid", "rejected"].includes(w.status)) {
+    if (["paid", "rejected", "failed"].includes(w.status)) {
       return res.status(400).json({
         success: false,
         message: `Withdrawal already ${w.status}`,
       });
     }
 
-    if (status === "rejected") {
+    if (status === "rejected" || status === "failed") {
       // Refund hold back to wallet
       const { creditWallet } = require("../services/walletService");
       await creditWallet({
@@ -629,7 +629,25 @@ async function processWithdrawal(req, res) {
         category: "withdrawal_refund",
         referenceType: "withdrawal_request",
         referenceId: id,
-        description: "Withdrawal rejected — amount returned to wallet",
+        description: `DEMO/Admin: withdrawal ${status} — amount returned to wallet`,
+        meta: { demo: true, type: "WITHDRAWAL_REJECTED" },
+      });
+    }
+
+    if (status === "paid") {
+      await pool.query(
+        `UPDATE wallet_transactions
+         SET meta_json = JSON_SET(COALESCE(meta_json, '{}'), '$.type', 'WITHDRAWAL_COMPLETED', '$.demo', true)
+         WHERE id = :txId`,
+        { txId: w.wallet_transaction_id }
+      );
+    }
+
+    const demoRef = w.demo_ref || `DEMO-WD-${String(id).padStart(8, "0")}`;
+    if (!w.demo_ref) {
+      await pool.query(`UPDATE withdrawal_requests SET demo_ref = :demoRef WHERE id = :id`, {
+        demoRef,
+        id,
       });
     }
 
@@ -650,18 +668,24 @@ async function processWithdrawal(req, res) {
       entityId: id,
       ipAddress: req.ip,
       userAgent: req.headers["user-agent"],
-      meta: { status, amount: w.amount, user_id: w.user_id },
+      meta: { status, amount: w.amount, user_id: w.user_id, demo_ref: demoRef },
     });
 
     return res.json({
       success: true,
       message:
         status === "paid"
-          ? "Marked paid — ensure NEFT/IMPS to user bank account is completed"
+          ? "DEMO MODE: marked completed — no real NEFT/UPI payout was sent"
           : status === "approved"
-            ? "Withdrawal approved — process bank transfer then mark paid"
+            ? "DEMO MODE: withdrawal approved — mark paid when demo review is done"
             : "Withdrawal rejected and amount refunded to wallet",
-      data: { withdrawal_id: id, status },
+      data: {
+        withdrawal_id: id,
+        demo_ref: demoRef,
+        status,
+        demo_mode: true,
+        demo_notice: "Virtual funds only. No real bank/UPI payout.",
+      },
     });
   } catch (error) {
     console.error("[ADMIN] process withdrawal error:", error);

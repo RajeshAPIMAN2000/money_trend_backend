@@ -19,6 +19,13 @@ async function getWallet(req, res) {
     const wallet = await ensureWallet(req.user.id);
     const balance = Number(wallet.balance);
     const maxInvestable = maxInvestableFromBalance(balance);
+    let demoSummary = null;
+    try {
+      const { getDemoWalletSummary } = require("../services/demoInvestmentService");
+      demoSummary = await getDemoWalletSummary(req.user.id);
+    } catch (_e) {
+      demoSummary = null;
+    }
     const [txs] = await pool.query(
       `SELECT id, direction, category, amount, balance_after, reference_type, reference_id,
               description, created_at
@@ -39,17 +46,18 @@ async function getWallet(req, res) {
         status: wallet.status,
         admin_fee_percent: getCommissionPercent(),
         max_investable_from_wallet: maxInvestable,
+        demo_wallet: demoSummary,
         recent_transactions: txs,
         invest_flow: {
           step_1_add_money:
-            "POST /api/wallet/deposit/* or POST /api/payments/dummy/create { purpose: wallet_deposit } — credits wallet only",
+            "POST /api/demo/wallet/add-money { amount } OR POST /api/payments/dummy/* (card+OTP)",
           step_2_check: "GET /api/wallet/can-invest?type=fd|rd&amount=...",
           step_3_invest:
-            "POST /api/fd or POST /api/market/rd — deducts from wallet. Use invest_all=true to use full wallet (balance → 0).",
-          note: "Payment never auto-invests. Wallet shows 0 after investing all cash (principal + fee).",
+            "POST /api/demo/fd | /api/demo/rd (or POST /api/fd | /api/market/rd)",
+          note: "DEMO MODE — virtual funds. Payment credits wallet only; Invest deducts from wallet.",
         },
         regulatory_note:
-          "Wallet is a prepaid balance for FD/RD investments on Money Trend. For bank demos use Dummy Payment Gateway (POST /api/payments/dummy/*) with test card numbers. Live deposits may use Razorpay when configured. Withdrawals credit your registered bank account after admin verification.",
+          "Wallet holds prepaid/demo balance for FD/RD on Money Trend. Bank UAT: use /api/demo/*. Live Razorpay deposits remain available when configured.",
       },
     });
   } catch (error) {
