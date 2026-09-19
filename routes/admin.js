@@ -66,11 +66,15 @@ const {
   adminCreateBlog,
   adminUpdateBlog,
   adminDeleteBlog,
+  adminApproveBlog,
+  adminRejectBlog,
   adminListNews,
   adminGetNews,
   adminCreateNews,
   adminUpdateNews,
   adminDeleteNews,
+  adminApproveNews,
+  adminRejectNews,
   listArticleCategories,
 } = require("../controllers/articleController");
 const {
@@ -110,20 +114,24 @@ router.put("/seo/pages", requirePermission("seo"), adminUpsertSeoPage);
 router.put("/seo/pages/:id", requirePermission("seo"), adminUpsertSeoPage);
 router.delete("/seo/pages/:id", requirePermission("seo"), adminDeleteSeoPage);
 
-// ----- Blog Management -----
+// ----- Blog Management (Sub Admin: create/edit/delete own → pending; Admin: approve/reject) -----
 router.get("/article-categories", requirePermission("blog"), listArticleCategories);
 router.get("/blogs", requirePermission("blog"), adminListBlogs);
 router.get("/blogs/:id", requirePermission("blog"), adminGetBlog);
 router.post("/blogs", requirePermission("blog"), upload.single("image"), adminCreateBlog);
 router.put("/blogs/:id", requirePermission("blog"), upload.single("image"), adminUpdateBlog);
 router.delete("/blogs/:id", requirePermission("blog"), adminDeleteBlog);
+router.post("/blogs/:id/approve", requireAdmin, adminApproveBlog);
+router.post("/blogs/:id/reject", requireAdmin, adminRejectBlog);
 
-// ----- News Management -----
+// ----- News Management (type locked to news — never mixes with blogs) -----
 router.get("/news", requirePermission("news"), adminListNews);
 router.get("/news/:id", requirePermission("news"), adminGetNews);
 router.post("/news", requirePermission("news"), upload.single("image"), adminCreateNews);
 router.put("/news/:id", requirePermission("news"), upload.single("image"), adminUpdateNews);
 router.delete("/news/:id", requirePermission("news"), adminDeleteNews);
+router.post("/news/:id/approve", requireAdmin, adminApproveNews);
+router.post("/news/:id/reject", requireAdmin, adminRejectNews);
 
 // ----- Full admin only below -----
 router.use(requireAdmin);

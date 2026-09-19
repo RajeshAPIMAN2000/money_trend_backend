@@ -8,12 +8,12 @@ const STAFF_PERMISSIONS = [
   {
     key: "blog",
     label: "Blog Management",
-    description: "Add and view blogs",
+    description: "Create/edit blogs (Sub Admin posts need Admin approval)",
   },
   {
     key: "news",
     label: "News Management",
-    description: "Add and view news",
+    description: "Create/edit news (Sub Admin posts need Admin approval)",
   },
 ];
 

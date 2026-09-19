@@ -586,19 +586,56 @@ async function ensureCoreTables() {
       description TEXT NOT NULL,
       category VARCHAR(100) NULL,
       image VARCHAR(500) NULL,
-      status ENUM('draft','published') NOT NULL DEFAULT 'published',
+      status ENUM('draft','pending','published','rejected') NOT NULL DEFAULT 'pending',
+      rejection_reason TEXT NULL,
+      reviewed_by INT UNSIGNED NULL,
+      reviewed_at DATETIME NULL,
+      submitted_at DATETIME NULL,
       created_by INT UNSIGNED NULL,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       PRIMARY KEY (id),
       KEY idx_articles_type_status (type, status),
       KEY idx_articles_created_at (created_at),
+      KEY idx_articles_created_by (created_by),
       CONSTRAINT fk_articles_admin FOREIGN KEY (created_by) REFERENCES users (id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
 
   await addColumnIfMissing(pool, "articles", "category", "category VARCHAR(100) NULL AFTER description");
-
+  // Expand status for Sub Admin → Admin approval workflow (existing DBs)
+  try {
+    await pool.query(
+      `ALTER TABLE articles
+       MODIFY COLUMN status ENUM('draft','pending','published','rejected') NOT NULL DEFAULT 'pending'`
+    );
+  } catch (e) {
+    console.warn("[DB] articles.status enum migrate:", e.message);
+  }
+  await addColumnIfMissing(
+    pool,
+    "articles",
+    "rejection_reason",
+    "rejection_reason TEXT NULL AFTER status"
+  );
+  await addColumnIfMissing(
+    pool,
+    "articles",
+    "reviewed_by",
+    "reviewed_by INT UNSIGNED NULL AFTER rejection_reason"
+  );
+  await addColumnIfMissing(
+    pool,
+    "articles",
+    "reviewed_at",
+    "reviewed_at DATETIME NULL AFTER reviewed_by"
+  );
+  await addColumnIfMissing(
+    pool,
+    "articles",
+    "submitted_at",
+    "submitted_at DATETIME NULL AFTER reviewed_at"
+  );
   await pool.query(`
     CREATE TABLE IF NOT EXISTS banners (
       id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
