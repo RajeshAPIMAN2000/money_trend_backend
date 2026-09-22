@@ -63,7 +63,10 @@ function buildOtpEmail({ firstName, otp, purpose, expiresMinutes }) {
   `;
 
   return {
-    subject: `Money Trend verification code`,
+    subject:
+      purpose === "PASSWORD_RESET"
+        ? `Money Trend password reset code`
+        : `Money Trend verification code`,
     html: renderEmailLayout({
       title: `${copy.heading} | ${cfg.appName || "Money Trend"}`,
       preheader: `Your Money Trend verification code expires in ${minutes} minutes.`,
@@ -73,7 +76,9 @@ function buildOtpEmail({ firstName, otp, purpose, expiresMinutes }) {
     text: [
       `Hello ${firstName || "there"},`,
       ``,
-      `Your Money Trend verification code is: ${otp}`,
+      purpose === "PASSWORD_RESET"
+        ? `Your Money Trend password reset code is: ${otp}`
+        : `Your Money Trend verification code is: ${otp}`,
       ``,
       `This code will expire in ${minutes} minutes.`,
       ``,

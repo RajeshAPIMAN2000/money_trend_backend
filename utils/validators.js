@@ -21,7 +21,47 @@ function isValidEmail(email) {
 }
 
 function isValidPhone(phone) {
-  return /^[6-9]\d{9}$/.test(String(phone || "").replace(/\s+/g, ""));
+  const digits = normalizeMobile(phone);
+  return /^[6-9]\d{9}$/.test(digits);
+}
+
+/** Normalize Indian mobile to 10 digits (strips +91 / 91 / 0 prefix). */
+function normalizeMobile(phone) {
+  let digits = String(phone || "").replace(/\D/g, "");
+  if (digits.length === 12 && digits.startsWith("91")) digits = digits.slice(2);
+  if (digits.length === 11 && digits.startsWith("0")) digits = digits.slice(1);
+  return digits;
+}
+
+/**
+ * Normalize DB / request DOB values to YYYY-MM-DD.
+ * mysql2 returns MySQL DATE as a JS Date at local midnight — use local
+ * Y/M/D (not UTC) or the calendar day shifts in IST (+05:30).
+ */
+function toDobIso(value) {
+  if (!value && value !== 0) return null;
+
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    const y = value.getFullYear();
+    const m = String(value.getMonth() + 1).padStart(2, "0");
+    const d = String(value.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
+
+  const s = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+
+  // e.g. "Mon Jun 16 1997 ..." from some drivers
+  const asDate = new Date(s);
+  if (!Number.isNaN(asDate.getTime()) && /[a-zA-Z]/.test(s)) {
+    const y = asDate.getFullYear();
+    const m = String(asDate.getMonth() + 1).padStart(2, "0");
+    const d = String(asDate.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
+
+  const parsed = parseDob(s);
+  return parsed ? parsed.iso : null;
 }
 
 function normalizePan(pan) {
@@ -124,6 +164,8 @@ module.exports = {
   SEBI_NOMINEE_RELATIONSHIPS,
   isValidEmail,
   isValidPhone,
+  normalizeMobile,
+  toDobIso,
   normalizePan,
   normalizeAadhaar,
   isValidPan,

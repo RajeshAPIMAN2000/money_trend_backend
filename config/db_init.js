@@ -682,6 +682,30 @@ async function ensureCoreTables() {
     "submitted_at",
     "submitted_at DATETIME NULL AFTER reviewed_at"
   );
+  await addColumnIfMissing(
+    pool,
+    "articles",
+    "email_notified_at",
+    "email_notified_at DATETIME NULL AFTER submitted_at"
+  );
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS email_campaign_logs (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      campaign_type VARCHAR(60) NOT NULL,
+      reference_type VARCHAR(40) NULL,
+      reference_id BIGINT UNSIGNED NULL,
+      recipients_total INT UNSIGNED NOT NULL DEFAULT 0,
+      sent_count INT UNSIGNED NOT NULL DEFAULT 0,
+      failed_count INT UNSIGNED NOT NULL DEFAULT 0,
+      meta_json JSON NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_email_campaign_type (campaign_type),
+      KEY idx_email_campaign_created (created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS banners (
       id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -716,6 +740,23 @@ async function ensureCoreTables() {
       KEY idx_support_created (created_at),
       CONSTRAINT fk_support_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
       CONSTRAINT fk_support_admin FOREIGN KEY (updated_by) REFERENCES users (id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS testimonials (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      user_id INT UNSIGNED NOT NULL,
+      rating TINYINT UNSIGNED NOT NULL,
+      description VARCHAR(1000) NOT NULL,
+      status ENUM('active','hidden') NOT NULL DEFAULT 'active',
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_testimonials_user (user_id),
+      KEY idx_testimonials_status (status),
+      KEY idx_testimonials_created (created_at),
+      CONSTRAINT fk_testimonials_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
 

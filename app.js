@@ -8,6 +8,7 @@ loadEnv();
 const { resolveUploadsDir } = require("./config/uploadsPath");
 const { ensureCoreTables } = require("./config/db_init");
 const { startRateSyncScheduler } = require("./services/fdRdRateService");
+const { startEmailCampaignSchedulers } = require("./services/emailCampaignService");
 const { validateEmailEnv, getEmailHealthSnapshot } = require("./services/email/emailConfig");
 const { getEmailProvider } = require("./services/email/providers");
 const { swaggerSpec } = require("./config/swagger");
@@ -31,6 +32,7 @@ const paymentsRoutes = require("./routes/payments");
 const seoRoutes = require("./routes/seo");
 const demoRoutes = require("./routes/demo");
 const goalsRoutes = require("./routes/goals");
+const testimonialsRoutes = require("./routes/testimonials");
 const { serveSitemap, serveRobots } = require("./controllers/seoController");
 const {
   listBlogs,
@@ -88,6 +90,7 @@ function mountApiRoutes(basePath = "") {
   app.use(route("/seo"), seoRoutes);
   app.use(route("/demo"), demoRoutes);
   app.use(route("/goals"), goalsRoutes);
+  app.use(route("/testimonials"), testimonialsRoutes);
   app.get(route("/health"), (_req, res) => {
     res.json(healthPayload());
   });
@@ -194,6 +197,7 @@ app.get(["/api", "/api/"], (_req, res) => {
       "/api/news",
       "/api/demo",
       "/api/goals",
+      "/api/testimonials",
       "/api/banners",
     ],
     docs: "/api-docs",
@@ -265,8 +269,19 @@ async function startServer() {
       await pingDatabase();
       console.log("[DB] connection OK");
     } catch (dbErr) {
-      console.error("[DB] FAILED:", dbErr.message);
-      if (/Access denied/i.test(dbErr.message)) {
+      const detail = [dbErr.code, dbErr.errno, dbErr.sqlState, dbErr.message]
+        .filter((v) => v != null && String(v).trim() !== "")
+        .join(" | ");
+      console.error("[DB] FAILED:", detail || String(dbErr));
+      if (/ECONNREFUSED|ENOTFOUND|ETIMEDOUT/i.test(String(dbErr.code || dbErr.message || ""))) {
+        console.error(
+          "[DB] MySQL is not reachable. Start MySQL (XAMPP: Start MySQL) then retry."
+        );
+        console.error(
+          `[DB] Tried ${process.env.DB_HOST || "localhost"}:${process.env.DB_PORT || 3306}`
+        );
+      }
+      if (/Access denied/i.test(dbErr.message || "")) {
         console.error(
           "[DB] Fix: edit .env — set DB_USER / DB_PASSWORD to a MySQL user that exists."
         );
@@ -306,6 +321,7 @@ async function startServer() {
 
     await ensureCoreTables();
     startRateSyncScheduler();
+    startEmailCampaignSchedulers();
     app.listen(port, host, () => {
       const displayHost = host === "0.0.0.0" ? "localhost" : host;
       // eslint-disable-next-line no-console

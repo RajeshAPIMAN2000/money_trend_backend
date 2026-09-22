@@ -2,6 +2,7 @@ const express = require("express");
 const {
   sendForgotPasswordOtp,
   resendForgotPasswordOtp,
+  verifyForgotPasswordOtp,
   resetPassword,
   register,
   login,
@@ -24,6 +25,7 @@ router.post("/resend-login-otp", emailOtpIpRateLimit, resendLoginOtp);
 
 router.post("/forgot-password/send-otp", emailOtpIpRateLimit, sendForgotPasswordOtp);
 router.post("/forgot-password/resend-otp", emailOtpIpRateLimit, resendForgotPasswordOtp);
+router.post("/forgot-password/verify-otp", emailOtpIpRateLimit, verifyForgotPasswordOtp);
 router.post("/forgot-password/reset", resetPassword);
 router.post("/register", register);
 router.post("/login", login);

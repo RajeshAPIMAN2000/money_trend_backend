@@ -356,7 +356,16 @@ async function createArticle(type, body, actor, reqMeta = {}) {
     meta: { heading: validation.data.heading, status },
   });
 
-  return getAdminById(result.insertId, lockedType);
+  const created = await getAdminById(result.insertId, lockedType);
+  if (created && created.status === "published") {
+    try {
+      const { queueArticlePublishedNotify } = require("./emailCampaignService");
+      queueArticlePublishedNotify(created);
+    } catch (e) {
+      console.error("[ARTICLE] notify queue failed:", e.message);
+    }
+  }
+  return created;
 }
 
 /**
@@ -460,7 +469,20 @@ async function updateArticle(id, type, body, actor, reqMeta = {}) {
     meta: { heading: data.heading, status: nextStatus },
   });
 
-  return getAdminById(id, lockedType);
+  const updated = await getAdminById(id, lockedType);
+  if (
+    updated &&
+    updated.status === "published" &&
+    existing.status !== "published"
+  ) {
+    try {
+      const { queueArticlePublishedNotify } = require("./emailCampaignService");
+      queueArticlePublishedNotify(updated);
+    } catch (e) {
+      console.error("[ARTICLE] notify queue failed:", e.message);
+    }
+  }
+  return updated;
 }
 
 async function deleteArticle(id, type, actor, reqMeta = {}) {
@@ -526,7 +548,16 @@ async function approveArticle(id, type, actor, reqMeta = {}) {
     meta: { heading: existing.heading },
   });
 
-  return getAdminById(id, lockedType);
+  const published = await getAdminById(id, lockedType);
+  if (published && published.status === "published") {
+    try {
+      const { queueArticlePublishedNotify } = require("./emailCampaignService");
+      queueArticlePublishedNotify(published);
+    } catch (e) {
+      console.error("[ARTICLE] notify queue failed:", e.message);
+    }
+  }
+  return published;
 }
 
 /** Admin rejects → rejected + reason (Sub Admin can edit & resubmit). */

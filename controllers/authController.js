@@ -2,7 +2,7 @@ const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 const pool = require("../config/db");
 const { signAccessToken, signRefreshToken } = require("../utils/jwt");
-const { isValidEmail, isValidPhone, parseDob } = require("../utils/validators");
+const { isValidEmail, isValidPhone, parseDob, normalizeMobile, toDobIso } = require("../utils/validators");
 const { sendOtp, resendOtp, verifyOtp, normalizePhone, maskPhone } = require("../services/otpService");
 const {
   EMAIL_OTP_PURPOSES,
@@ -116,20 +116,50 @@ function parseDateOfBirth(body) {
   return parseDob(body.dob || body.date_of_birth || body.dateOfBirth);
 }
 
+/**
+ * Verify email + mobile + DOB together against the database.
+ * Returns user on match, or null when any field is wrong.
+ */
 async function findUserForForgotPassword(email, phone, dobIso) {
+  const normalizedPhone = normalizeMobile(phone);
   const [rows] = await pool.query(
-    `SELECT id, email, full_name, phone, role, date_of_birth FROM users WHERE email = :email AND phone = :phone LIMIT 1`,
-    { email, phone }
+    `SELECT id, email, full_name, phone, role, date_of_birth,
+            DATE_FORMAT(date_of_birth, '%Y-%m-%d') AS date_of_birth_iso
+     FROM users
+     WHERE LOWER(TRIM(email)) = :email
+     LIMIT 1`,
+    { email: String(email || "").trim().toLowerCase() }
   );
 
-  if (!rows.length) return null;
+  if (!rows.length) {
+    console.log("[AUTH] forgot-password: email not found");
+    return null;
+  }
 
   const user = rows[0];
-  if (user.role === "admin") return null;
-  if (!user.date_of_birth) return null;
+  if (user.role === "admin" || user.role === "sub_admin") {
+    console.log("[AUTH] forgot-password: staff account not allowed");
+    return null;
+  }
 
-  const storedDob = String(user.date_of_birth).slice(0, 10);
-  if (storedDob !== dobIso) return null;
+  const storedPhone = normalizeMobile(user.phone);
+  if (!storedPhone || storedPhone !== normalizedPhone) {
+    console.log("[AUTH] forgot-password: phone mismatch", {
+      expected_last4: storedPhone.slice(-4),
+      got_last4: String(normalizedPhone || "").slice(-4),
+    });
+    return null;
+  }
+
+  // Prefer SQL-formatted calendar date to avoid JS timezone day-shift
+  const storedDob = user.date_of_birth_iso || toDobIso(user.date_of_birth);
+  if (!storedDob || storedDob !== dobIso) {
+    console.log("[AUTH] forgot-password: DOB mismatch", {
+      stored: storedDob,
+      received: dobIso,
+    });
+    return null;
+  }
 
   return user;
 }
@@ -207,39 +237,29 @@ async function resendLoginOtp(req, res) {
 async function sendForgotPasswordOtp(req, res) {
   try {
     const email = normalizeEmail(req.body.email);
-    const phone = normalizePhone(req.body.phone || req.body.phone_number || req.body.phoneNumber);
+    const phone = normalizeMobile(
+      req.body.phone || req.body.phone_number || req.body.phoneNumber
+    );
     const dobParsed = parseDateOfBirth(req.body);
 
-    if (!email || !phone || !dobParsed) {
+    if (!email || !phone || !dobParsed || !isValidEmail(email) || !isValidPhone(phone)) {
       return res.status(400).json({
         success: false,
-        message: "Email, phone number and date of birth are required",
-        errorCode: "VALIDATION_ERROR",
-      });
-    }
-
-    if (!isValidEmail(email)) {
-      return res.status(400).json({ success: false, message: "Invalid email address", errorCode: "INVALID_EMAIL" });
-    }
-
-    if (!isValidPhone(phone)) {
-      return res.status(400).json({
-        success: false,
-        message: "Phone number must be a valid 10-digit Indian mobile number",
-        errorCode: "INVALID_PHONE",
+        message: "Invalid email, mobile number or date of birth",
+        errorCode: "INVALID_CREDENTIALS",
       });
     }
 
     const user = await findUserForForgotPassword(email, phone, dobParsed.iso);
-    // Enumeration-safe generic response
     if (!user) {
-      return res.json({
-        success: true,
-        message: "If the account details are valid, a verification code has been sent to your email.",
-        data: { purpose: "PASSWORD_RESET", channel: "email", delivery: "email" },
+      return res.status(400).json({
+        success: false,
+        message: "Invalid email, mobile number or date of birth",
+        errorCode: "INVALID_CREDENTIALS",
       });
     }
 
+    // Await SMTP so failures are returned to the client (not silent background fail)
     const data = await sendEmailOtp({
       email: user.email,
       purpose: "PASSWORD_RESET",
@@ -247,16 +267,27 @@ async function sendForgotPasswordOtp(req, res) {
       firstName: String(user.full_name || "").split(/\s+/)[0] || null,
       ipAddress: req.ip,
       requireExistingUser: true,
+      awaitSend: true,
     });
+
+    if (!data.sent) {
+      return res.status(502).json({
+        success: false,
+        message: "Unable to send OTP email. Please try again later.",
+        errorCode: "EMAIL_SEND_FAILED",
+      });
+    }
 
     return res.json({
       success: true,
-      message: "If the account details are valid, a verification code has been sent to your email.",
+      message: "OTP sent to your registered email. Please verify to reset your password.",
       data: {
         ...data,
         channel: "email",
         delivery: "email",
-        hint: "Check your inbox (and spam) for the Money Trend password reset OTP.",
+        next_step:
+          "POST /api/auth/forgot-password/verify-otp then POST /api/auth/forgot-password/reset",
+        hint: "Check inbox and spam for the Money Trend password reset OTP.",
       },
     });
   } catch (error) {
@@ -268,10 +299,64 @@ async function resendForgotPasswordOtp(req, res) {
   return sendForgotPasswordOtp(req, res);
 }
 
+/** Step 2 — verify email OTP before allowing password change */
+async function verifyForgotPasswordOtp(req, res) {
+  try {
+    const email = normalizeEmail(req.body.email);
+    const phone = normalizeMobile(
+      req.body.phone || req.body.phone_number || req.body.phoneNumber
+    );
+    const dobParsed = parseDateOfBirth(req.body);
+    const otp = String(req.body.otp || req.body.otp_code || "").trim();
+
+    if (!email || !phone || !dobParsed || !otp) {
+      return res.status(400).json({
+        success: false,
+        message: "Email, mobile number, date of birth and OTP are required",
+        errorCode: "VALIDATION_ERROR",
+      });
+    }
+
+    const user = await findUserForForgotPassword(email, phone, dobParsed.iso);
+    if (!user) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid email, mobile number or date of birth",
+        errorCode: "INVALID_CREDENTIALS",
+      });
+    }
+
+    try {
+      await verifyEmailOtp({
+        email: user.email,
+        otp,
+        purpose: "PASSWORD_RESET",
+        markEmailVerified: false,
+      });
+    } catch (otpError) {
+      return handleEmailOtpError(res, otpError, "OTP verification failed");
+    }
+
+    return res.json({
+      success: true,
+      message: "OTP verified. You can now set a new password.",
+      data: {
+        verified: true,
+        email: user.email,
+        next_step: "POST /api/auth/forgot-password/reset with otp and new password",
+      },
+    });
+  } catch (error) {
+    return handleEmailOtpError(res, error, "Failed to verify password reset OTP");
+  }
+}
+
 async function resetPassword(req, res) {
   try {
-    const email = String(req.body.email || "").trim().toLowerCase();
-    const phone = normalizePhone(req.body.phone || req.body.phone_number || req.body.phoneNumber);
+    const email = normalizeEmail(req.body.email);
+    const phone = normalizeMobile(
+      req.body.phone || req.body.phone_number || req.body.phoneNumber
+    );
     const dobParsed = parseDateOfBirth(req.body);
     const otp = String(req.body.otp || "").trim();
     const password = String(req.body.password || req.body.new_password || req.body.newPassword || "");
@@ -284,17 +369,15 @@ async function resetPassword(req, res) {
         success: false,
         message:
           "Email, phone, date of birth, OTP, new password and confirm password are required",
+        errorCode: "VALIDATION_ERROR",
       });
     }
 
-    if (!isValidEmail(email)) {
-      return res.status(400).json({ success: false, message: "Invalid email address" });
-    }
-
-    if (!isValidPhone(phone)) {
+    if (!isValidEmail(email) || !isValidPhone(phone)) {
       return res.status(400).json({
         success: false,
-        message: "Phone number must be a valid 10-digit Indian mobile number",
+        message: "Invalid email, mobile number or date of birth",
+        errorCode: "INVALID_CREDENTIALS",
       });
     }
 
@@ -314,18 +397,20 @@ async function resetPassword(req, res) {
 
     const user = await findUserForForgotPassword(email, phone, dobParsed.iso);
     if (!user) {
-      return res.status(404).json({
+      return res.status(400).json({
         success: false,
-        message: "No account found with the provided email, phone and date of birth",
+        message: "Invalid email, mobile number or date of birth",
+        errorCode: "INVALID_CREDENTIALS",
       });
     }
 
     try {
       await verifyEmailOtp({
-        email,
+        email: user.email,
         otp,
         purpose: "PASSWORD_RESET",
         markEmailVerified: false,
+        allowRecentlyVerified: true,
       });
     } catch (otpError) {
       return handleEmailOtpError(res, otpError, "OTP verification failed");
@@ -341,7 +426,7 @@ async function resetPassword(req, res) {
     return res.json({
       success: true,
       message: "Password reset successful. Please login with your new password.",
-      data: { email, phone_masked: maskPhone(user.phone) },
+      data: { email: user.email, phone_masked: maskPhone(user.phone) },
     });
   } catch (error) {
     console.error("[AUTH] reset password error:", error);
@@ -789,6 +874,7 @@ module.exports = {
   resendLoginOtp,
   sendForgotPasswordOtp,
   resendForgotPasswordOtp,
+  verifyForgotPasswordOtp,
   resetPassword,
   register,
   login,

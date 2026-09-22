@@ -108,6 +108,7 @@ async function sendEmailOtp({
   ipAddress = null,
   requireExistingUser = false,
   requireMissingUser = false,
+  awaitSend = false,
 }) {
   const cfg = getEmailConfig();
   const normalizedEmail = normalizeEmail(email);
@@ -239,9 +240,10 @@ async function sendEmailOtp({
     }
   );
 
-  // SMTP (e.g. GoDaddy) can be slow — don't block the API for the full round-trip.
-  // OTP is already stored; email continues in background. Failures are logged.
+  // SMTP (e.g. GoDaddy) can be slow — default async for most flows.
+  // Password reset uses awaitSend=true so delivery failures are returned to the client.
   const asyncOtp =
+    !awaitSend &&
     String(process.env.EMAIL_OTP_ASYNC || "true").toLowerCase() !== "false";
 
   if (asyncOtp) {
@@ -256,14 +258,21 @@ async function sendEmailOtp({
     });
   } else {
     try {
-      await sendOtpEmail({
+      const mailResult = await sendOtpEmail({
         to: normalizedEmail,
         firstName: resolvedFirstName,
         otp,
         purpose: safePurpose,
         expiresMinutes: cfg.otpExpiryMinutes,
       });
+      console.log("[EMAIL_OTP] sent", {
+        purpose: safePurpose,
+        email_masked: maskEmail(normalizedEmail),
+        provider: mailResult?.provider || null,
+        messageId: mailResult?.messageId || null,
+      });
     } catch (mailErr) {
+      console.error("[EMAIL_OTP] send failed:", mailErr.message || mailErr);
       const err = new Error("Unable to send verification email. Please try again later.");
       err.code = "EMAIL_SEND_FAILED";
       err.errorCode = "EMAIL_SEND_FAILED";
@@ -282,7 +291,13 @@ async function sendEmailOtp({
   };
 }
 
-async function verifyEmailOtp({ email, otp, purpose, markEmailVerified = true }) {
+async function verifyEmailOtp({
+  email,
+  otp,
+  purpose,
+  markEmailVerified = true,
+  allowRecentlyVerified = false,
+}) {
   const cfg = getEmailConfig();
   const normalizedEmail = normalizeEmail(email);
   const safePurpose = normalizePurpose(purpose);
@@ -305,6 +320,29 @@ async function verifyEmailOtp({ email, otp, purpose, markEmailVerified = true })
     err.code = "INVALID_OTP";
     err.errorCode = "INVALID_OTP";
     throw err;
+  }
+
+  // After verify-otp step, reset may reuse the same OTP within the window
+  if (allowRecentlyVerified) {
+    const [recent] = await pool.query(
+      `SELECT id, otp_hash, verified_at
+       FROM email_otp_verifications
+       WHERE email = :email AND purpose = :purpose
+         AND verified_at IS NOT NULL
+         AND verified_at >= DATE_SUB(NOW(), INTERVAL 30 MINUTE)
+       ORDER BY verified_at DESC
+       LIMIT 1`,
+      { email: normalizedEmail, purpose: safePurpose }
+    );
+    if (recent.length && safeEqualHash(hashOtp(otpValue), recent[0].otp_hash)) {
+      return {
+        verified: true,
+        reused_recent: true,
+        email: normalizedEmail,
+        email_masked: maskEmail(normalizedEmail),
+        purpose: safePurpose,
+      };
+    }
   }
 
   const record = await getLatestActiveOtp(normalizedEmail, safePurpose);

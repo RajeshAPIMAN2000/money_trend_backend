@@ -96,6 +96,10 @@ const {
   adminGetGoal,
 } = require("../controllers/goalController");
 const {
+  adminListTestimonials,
+  adminDeleteTestimonial,
+} = require("../controllers/testimonialController");
+const {
   adminListTickets,
   adminGetTicket,
   adminUpdateTicketStatus,
@@ -211,5 +215,8 @@ router.get("/support", adminListTickets);
 router.get("/support/:id", adminGetTicket);
 router.patch("/support/:id/status", adminUpdateTicketStatus);
 router.put("/support/:id/status", adminUpdateTicketStatus);
+
+router.get("/testimonials", adminListTestimonials);
+router.delete("/testimonials/:id", adminDeleteTestimonial);
 
 module.exports = router;
