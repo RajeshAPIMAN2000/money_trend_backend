@@ -33,6 +33,7 @@ const seoRoutes = require("./routes/seo");
 const demoRoutes = require("./routes/demo");
 const goalsRoutes = require("./routes/goals");
 const testimonialsRoutes = require("./routes/testimonials");
+const notificationsRoutes = require("./routes/notifications");
 const { serveSitemap, serveRobots } = require("./controllers/seoController");
 const {
   listBlogs,
@@ -91,6 +92,7 @@ function mountApiRoutes(basePath = "") {
   app.use(route("/demo"), demoRoutes);
   app.use(route("/goals"), goalsRoutes);
   app.use(route("/testimonials"), testimonialsRoutes);
+  app.use(route("/notifications"), notificationsRoutes);
   app.get(route("/health"), (_req, res) => {
     res.json(healthPayload());
   });

@@ -10,6 +10,7 @@ const {
   buildArticlePublishedEmail,
   buildInvestmentAttractEmail,
 } = require("./email/templates/campaignEmails");
+const { safeNotify, notifyAllUsers } = require("./notificationService");
 
 function contentNotifyEnabled() {
   return String(process.env.CONTENT_EMAIL_NOTIFY_ENABLED || "true").toLowerCase() !== "false";
@@ -55,17 +56,36 @@ async function listRegisteredUserEmails() {
 }
 
 /**
- * Fire-and-forget: notify users about a newly published article.
- * Deduped via articles.email_notified_at.
+ * Fire-and-forget: notify users about a newly published article (in-app + email).
+ * Email is deduped via articles.email_notified_at.
  */
 function queueArticlePublishedNotify(article) {
-  if (!contentNotifyEnabled()) {
-    console.log("[CAMPAIGN] content notify disabled — skip article", article?.id);
-    return;
-  }
   if (!article?.id || article.status !== "published") return;
 
   setImmediate(() => {
+    const typeLabel = article.type === "news" ? "News" : "Blog";
+    notifyAllUsers({
+      eventType: "article_published",
+      title: `New ${typeLabel}: ${article.heading}`,
+      body: String(article.description || "")
+        .replace(/<[^>]+>/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 280),
+      referenceType: article.type || "blog",
+      referenceId: article.id,
+      meta: {
+        type: article.type,
+        heading: article.heading,
+        emailed: contentNotifyEnabled(),
+      },
+    }).catch((err) => console.error("[CAMPAIGN] article in-app notify failed:", err.message || err));
+
+    if (!contentNotifyEnabled()) {
+      console.log("[CAMPAIGN] content email disabled — in-app only for article", article?.id);
+      return;
+    }
+
     sendArticlePublishedBlast(article).catch((err) =>
       console.error("[CAMPAIGN] article blast failed:", err.message || err)
     );
@@ -206,6 +226,18 @@ async function sendInvestmentAttractionCampaign() {
   );
 
   console.log(`[CAMPAIGN] investment attract emailed: sent=${sent} failed=${failed} total=${users.length}`);
+
+  safeNotify(async () => {
+    await notifyAllUsers({
+      eventType: "investment_offer_email",
+      title: "New investment opportunity",
+      body: "Check the latest FD/RD offers on Money Trend. We also emailed you the details.",
+      referenceType: "campaign",
+      referenceId: null,
+      meta: { emailed: true, email_type: "investment_attract", email_sent: sent },
+    });
+  });
+
   return { sent, failed, total: users.length };
 }
 

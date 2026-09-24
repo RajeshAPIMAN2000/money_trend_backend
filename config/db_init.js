@@ -730,6 +730,8 @@ async function ensureCoreTables() {
       attachment VARCHAR(500) NULL,
       status ENUM('pending', 'in_process', 'fixed') NOT NULL DEFAULT 'pending',
       admin_note TEXT NULL,
+      assigned_to INT UNSIGNED NULL,
+      assigned_at DATETIME NULL,
       resolved_at DATETIME NULL,
       updated_by INT UNSIGNED NULL,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -737,9 +739,53 @@ async function ensureCoreTables() {
       PRIMARY KEY (id),
       KEY idx_support_user (user_id),
       KEY idx_support_status (status),
+      KEY idx_support_assigned (assigned_to),
       KEY idx_support_created (created_at),
       CONSTRAINT fk_support_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+      CONSTRAINT fk_support_assignee FOREIGN KEY (assigned_to) REFERENCES users (id) ON DELETE SET NULL,
       CONSTRAINT fk_support_admin FOREIGN KEY (updated_by) REFERENCES users (id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  await addColumnIfMissing(
+    pool,
+    "support_tickets",
+    "assigned_to",
+    "assigned_to INT UNSIGNED NULL AFTER admin_note"
+  );
+  await addColumnIfMissing(
+    pool,
+    "support_tickets",
+    "assigned_at",
+    "assigned_at DATETIME NULL AFTER assigned_to"
+  );
+  try {
+    await pool.query(
+      `ALTER TABLE support_tickets ADD KEY idx_support_assigned (assigned_to)`
+    );
+  } catch (_e) {
+    /* index may already exist */
+  }
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS notifications (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      user_id INT UNSIGNED NOT NULL,
+      audience ENUM('user','admin','content_manager','customer_support') NOT NULL DEFAULT 'user',
+      event_type VARCHAR(64) NOT NULL,
+      title VARCHAR(200) NOT NULL,
+      body VARCHAR(1000) NULL,
+      reference_type VARCHAR(40) NULL,
+      reference_id BIGINT UNSIGNED NULL,
+      meta_json JSON NULL,
+      is_read TINYINT(1) NOT NULL DEFAULT 0,
+      read_at DATETIME NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_notif_user_unread (user_id, is_read, created_at),
+      KEY idx_notif_audience (audience, created_at),
+      KEY idx_notif_event (event_type),
+      CONSTRAINT fk_notif_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
 

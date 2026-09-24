@@ -12,6 +12,7 @@ const {
 const { createDepositOrder, verifyPaymentSignature } = require("../services/razorpayService");
 const { encryptPii } = require("../utils/security");
 const { sanitizeText } = require("../utils/validators");
+const { safeNotify, notifyUser, notifyAdmins } = require("../services/notificationService");
 
 async function getWallet(req, res) {
   console.log("[WALLET] get balance user:", req.user?.id);
@@ -458,6 +459,25 @@ async function requestWithdrawal(req, res) {
       `UPDATE wallet_transactions SET reference_id = :refId WHERE id = :txId`,
       { refId: ins.insertId, txId: tx.transaction_id }
     );
+
+    safeNotify(async () => {
+      await notifyUser(req.user.id, {
+        eventType: "withdrawal_requested",
+        title: "Withdrawal requested",
+        body: `₹${amount} withdrawal to ${bank.bank_name} is pending admin review.`,
+        referenceType: "withdrawal",
+        referenceId: ins.insertId,
+        meta: { amount, demo_ref: demoRef, status: "pending" },
+      });
+      await notifyAdmins({
+        eventType: "withdrawal_pending",
+        title: `Withdrawal request #${ins.insertId}`,
+        body: `User #${req.user.id} requested ₹${amount} withdrawal.`,
+        referenceType: "withdrawal",
+        referenceId: ins.insertId,
+        meta: { user_id: req.user.id, amount },
+      });
+    });
 
     return res.status(201).json({
       success: true,

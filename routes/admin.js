@@ -31,6 +31,10 @@ const {
   getAdminAssetAllocation,
   listUsers,
   getUserById,
+  sendUserEmailOtp,
+  createUser,
+  upsertUserKyc,
+  upsertUserNominee,
   updateUserKycStatus,
   listWithdrawals,
   processWithdrawal,
@@ -102,8 +106,17 @@ const {
 const {
   adminListTickets,
   adminGetTicket,
+  adminListSupportAgents,
+  adminAssignTicket,
   adminUpdateTicketStatus,
+  adminReplyTicket,
 } = require("../controllers/supportController");
+const {
+  listMyNotifications,
+  getMyUnreadCount,
+  markNotificationRead,
+  markAllNotificationsRead,
+} = require("../controllers/notificationController");
 const { upload } = require("../middleware/upload");
 
 const router = express.Router();
@@ -142,6 +155,25 @@ router.delete("/news/:id", requirePermission("news"), adminDeleteNews);
 router.post("/news/:id/approve", requireAdmin, adminApproveNews);
 router.post("/news/:id/reject", requireAdmin, adminRejectNews);
 
+// ----- Customer Support Panel (admin or sub-admin with support role) -----
+router.get("/support/agents", requirePermission("support"), adminListSupportAgents);
+router.get("/support", requirePermission("support"), adminListTickets);
+router.get("/support/:id", requirePermission("support"), adminGetTicket);
+router.post("/support/:id/assign", requireAdmin, adminAssignTicket);
+router.put("/support/:id/assign", requireAdmin, adminAssignTicket);
+router.patch("/support/:id/assign", requireAdmin, adminAssignTicket);
+router.post("/support/:id/reply", requirePermission("support"), adminReplyTicket);
+router.patch("/support/:id/reply", requirePermission("support"), adminReplyTicket);
+router.patch("/support/:id/status", requirePermission("support"), adminUpdateTicketStatus);
+router.put("/support/:id/status", requirePermission("support"), adminUpdateTicketStatus);
+
+// ----- In-app notifications (admin + all sub-admins) -----
+router.get("/notifications", listMyNotifications);
+router.get("/notifications/unread-count", getMyUnreadCount);
+router.patch("/notifications/:id/read", markNotificationRead);
+router.post("/notifications/read-all", markAllNotificationsRead);
+router.patch("/notifications/read-all", markAllNotificationsRead);
+
 // ----- Full admin only below -----
 router.use(requireAdmin);
 
@@ -179,7 +211,13 @@ router.get("/investments/asset-allocation/rd", getAdminRdAssetAllocation);
 router.get("/investments/asset-allocation", getAdminAssetAllocation);
 
 router.get("/users", listUsers);
+router.post("/users/send-email-otp", sendUserEmailOtp);
+router.post("/users", createUser);
 router.get("/users/:id", getUserById);
+router.post("/users/:id/kyc", upload.any(), upsertUserKyc);
+router.put("/users/:id/kyc", upload.any(), upsertUserKyc);
+router.post("/users/:id/nominee", upload.any(), upsertUserNominee);
+router.put("/users/:id/nominee", upload.any(), upsertUserNominee);
 router.patch("/users/:id/kyc-status", updateUserKycStatus);
 
 router.get("/users/:id/bank-account", getUserBankAccountAdmin);
@@ -210,11 +248,6 @@ router.get("/credit-checks/equifax/status", adminEquifaxCdsStatus);
 router.post("/credit-checks/equifax/token-test", adminEquifaxCdsStatus);
 router.get("/credit-checks/:id", adminGetCreditCheck);
 router.get("/users/:id/credit-checks", adminGetUserCreditScores);
-
-router.get("/support", adminListTickets);
-router.get("/support/:id", adminGetTicket);
-router.patch("/support/:id/status", adminUpdateTicketStatus);
-router.put("/support/:id/status", adminUpdateTicketStatus);
 
 router.get("/testimonials", adminListTestimonials);
 router.delete("/testimonials/:id", adminDeleteTestimonial);

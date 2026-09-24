@@ -106,7 +106,7 @@ async function createSubAdmin(req, res) {
     if (!roles.length) {
       return res.status(400).json({
         success: false,
-        message: "Assign at least one role: seo, blog, news",
+        message: "Assign at least one role: seo, blog, news, support",
         data: { available_roles: listAvailableRoles() },
       });
     }
@@ -208,7 +208,7 @@ async function updateSubAdmin(req, res) {
     if (!roles.length) {
       return res.status(400).json({
         success: false,
-        message: "Assign at least one role: seo, blog, news",
+        message: "Assign at least one role: seo, blog, news, support",
       });
     }
 

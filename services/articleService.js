@@ -2,6 +2,12 @@ const pool = require("../config/db");
 const { sanitizeText } = require("../utils/validators");
 const { writeAuditLog } = require("../utils/audit");
 const { isFullAdmin } = require("./staffPermissionService");
+const {
+  safeNotify,
+  notifyUser,
+  notifyAdmins,
+  notifyContentManagers,
+} = require("./notificationService");
 
 const ARTICLE_TYPES = ["blog", "news"];
 const ARTICLE_STATUSES = ["draft", "pending", "published", "rejected"];
@@ -364,6 +370,26 @@ async function createArticle(type, body, actor, reqMeta = {}) {
     } catch (e) {
       console.error("[ARTICLE] notify queue failed:", e.message);
     }
+  } else if (created && created.status === "pending") {
+    safeNotify(async () => {
+      await notifyAdmins({
+        eventType: "article_pending_approval",
+        title: `New ${lockedType} pending approval`,
+        body: created.heading,
+        referenceType: lockedType,
+        referenceId: created.id,
+        meta: { type: lockedType, created_by: createdBy },
+      });
+      if (createdBy) {
+        await notifyUser(createdBy, {
+          eventType: "article_submitted",
+          title: `Your ${lockedType} was submitted for approval`,
+          body: created.heading,
+          referenceType: lockedType,
+          referenceId: created.id,
+        });
+      }
+    });
   }
   return created;
 }
@@ -557,6 +583,26 @@ async function approveArticle(id, type, actor, reqMeta = {}) {
       console.error("[ARTICLE] notify queue failed:", e.message);
     }
   }
+
+  safeNotify(async () => {
+    if (existing.created_by) {
+      await notifyUser(existing.created_by, {
+        eventType: "article_approved",
+        title: `Your ${lockedType} was approved`,
+        body: existing.heading,
+        referenceType: lockedType,
+        referenceId: id,
+      });
+      await notifyContentManagers({
+        eventType: "article_approved",
+        title: `${lockedType} approved by admin`,
+        body: existing.heading,
+        referenceType: lockedType,
+        referenceId: id,
+      });
+    }
+  });
+
   return published;
 }
 
@@ -605,6 +651,19 @@ async function rejectArticle(id, type, actor, reason, reqMeta = {}) {
     entityId: id,
     ipAddress: reqMeta.ip,
     meta: { heading: existing.heading, reason: rejectionReason },
+  });
+
+  safeNotify(async () => {
+    if (existing.created_by) {
+      await notifyUser(existing.created_by, {
+        eventType: "article_rejected",
+        title: `Your ${lockedType} was rejected`,
+        body: rejectionReason,
+        referenceType: lockedType,
+        referenceId: id,
+        meta: { heading: existing.heading },
+      });
+    }
   });
 
   return getAdminById(id, lockedType);

@@ -342,7 +342,10 @@ async function getUserById(req, res) {
     }
 
     const [rows] = await pool.query(
-      `SELECT id, full_name, email, phone, profile_image, role, kyc_status, kyc_method, created_at, updated_at
+      `SELECT id, full_name, email, phone,
+              DATE_FORMAT(date_of_birth, '%Y-%m-%d') AS date_of_birth,
+              profile_image, role, kyc_status, kyc_method, email_verified_at,
+              created_at, updated_at
        FROM users WHERE id = :userId AND role = 'user' LIMIT 1`,
       { userId }
     );
@@ -374,7 +377,10 @@ async function getUserById(req, res) {
       success: true,
       message: "User details fetched successfully",
       data: {
-        user,
+        user: {
+          ...user,
+          email_verified: Boolean(user.email_verified_at),
+        },
         kyc: mapKyc(kycRows[0] || null),
         nominee: mapNominee(nomineeRows[0] || null),
         credit_score: {
@@ -392,6 +398,127 @@ async function getUserById(req, res) {
       message: "Failed to fetch user",
       error: error.message,
     });
+  }
+}
+
+function adminOnboardingCtx(req) {
+  return {
+    adminId: req.user?.id || null,
+    ipAddress: req.ip,
+    userAgent: req.headers["user-agent"],
+  };
+}
+
+function handleAdminOnboardingError(res, error, fallbackMessage) {
+  const status =
+    error.status ||
+    (error.code === "VALIDATION_ERROR"
+      ? 400
+      : error.code === "RATE_LIMITED" || error.code === "COOLDOWN"
+        ? 429
+        : error.code === "INVALID_OTP" ||
+            error.code === "OTP_EXPIRED" ||
+            error.code === "OTP_LOCKED" ||
+            error.code === "OTP_REQUIRED"
+          ? 400
+          : error.code === "EMAIL_SEND_FAILED"
+            ? 502
+            : error.code === "ALREADY_REGISTERED"
+              ? 409
+              : 500);
+  if (status >= 500) {
+    console.error(`[ADMIN] ${fallbackMessage}:`, error);
+  }
+  return res.status(status).json({
+    success: false,
+    message: error.message || fallbackMessage,
+    errorCode: error.errorCode || error.code || (error.extra && error.extra.errorCode) || undefined,
+    ...(error.extra || {}),
+    ...(error.retryAfter ? { data: { retry_after: error.retryAfter } } : {}),
+    ...(status >= 500 ? { error: error.message } : {}),
+  });
+}
+
+async function createUser(req, res) {
+  console.log("[ADMIN] create user body:", {
+    ...req.body,
+    password: req.body?.password ? "***" : undefined,
+    confirm_password:
+      req.body?.confirm_password || req.body?.confirmPassword ? "***" : undefined,
+    otp: req.body?.otp ? "***" : undefined,
+  });
+  try {
+    const {
+      createUserByAdmin,
+    } = require("../services/adminUserOnboardingService");
+    const data = await createUserByAdmin(req.body || {}, adminOnboardingCtx(req));
+    return res.status(201).json({
+      success: true,
+      message: "User created successfully. Please complete KYC.",
+      data,
+    });
+  } catch (error) {
+    return handleAdminOnboardingError(res, error, "Failed to create user");
+  }
+}
+
+async function sendUserEmailOtp(req, res) {
+  console.log("[ADMIN] send user email otp:", { email: req.body?.email });
+  try {
+    const {
+      sendRegisterEmailOtpByAdmin,
+    } = require("../services/adminUserOnboardingService");
+    const data = await sendRegisterEmailOtpByAdmin(req.body || {}, adminOnboardingCtx(req));
+    return res.json({
+      success: true,
+      message: "If the email is eligible for verification, a verification code has been sent.",
+      data,
+    });
+  } catch (error) {
+    return handleAdminOnboardingError(res, error, "Failed to send email OTP");
+  }
+}
+
+async function upsertUserKyc(req, res) {
+  console.log("[ADMIN] upsert user kyc:", req.params.id, "body:", req.body);
+  try {
+    const { upsertKycByAdmin } = require("../services/adminUserOnboardingService");
+    const data = await upsertKycByAdmin(
+      req.params.id,
+      req.body || {},
+      req.files,
+      adminOnboardingCtx(req)
+    );
+    return res.status(201).json({
+      success: true,
+      message:
+        data.kyc_status === "verified"
+          ? "User KYC saved and approved. Please enter nominee details."
+          : "Manual KYC submitted successfully. Please enter nominee details.",
+      data,
+    });
+  } catch (error) {
+    return handleAdminOnboardingError(res, error, "Failed to save user KYC");
+  }
+}
+
+async function upsertUserNominee(req, res) {
+  console.log("[ADMIN] upsert user nominee:", req.params.id, "body:", req.body);
+  try {
+    const { upsertNomineeByAdmin } = require("../services/adminUserOnboardingService");
+    const data = await upsertNomineeByAdmin(
+      req.params.id,
+      req.body || {},
+      req.files,
+      adminOnboardingCtx(req)
+    );
+    return res.status(201).json({
+      success: true,
+      message: "Nominee details saved successfully (SEBI-compliant)",
+      data,
+    });
+  } catch (error) {
+    return handleAdminOnboardingError(res, error, "Failed to save nominee");
   }
 }
 
@@ -669,6 +796,27 @@ async function processWithdrawal(req, res) {
       ipAddress: req.ip,
       userAgent: req.headers["user-agent"],
       meta: { status, amount: w.amount, user_id: w.user_id, demo_ref: demoRef },
+    });
+
+    const { safeNotify, notifyUser } = require("../services/notificationService");
+    safeNotify(async () => {
+      const eventType =
+        status === "rejected" || status === "failed"
+          ? "withdrawal_rejected"
+          : status === "paid" || status === "approved"
+            ? "withdrawal_approved"
+            : "withdrawal_updated";
+      await notifyUser(w.user_id, {
+        eventType,
+        title: `Withdrawal ${status}`,
+        body:
+          status === "rejected" || status === "failed"
+            ? `Your withdrawal #${id} was ${status}. Amount returned to wallet.`
+            : `Your withdrawal #${id} is now ${status}.`,
+        referenceType: "withdrawal",
+        referenceId: id,
+        meta: { status, amount: w.amount, admin_note: adminNote },
+      });
     });
 
     return res.json({
@@ -1095,6 +1243,10 @@ module.exports = {
   getAdminAssetAllocation,
   listUsers,
   getUserById,
+  sendUserEmailOtp,
+  createUser,
+  upsertUserKyc,
+  upsertUserNominee,
   updateUserKycStatus,
   listWithdrawals,
   processWithdrawal,

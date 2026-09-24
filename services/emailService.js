@@ -200,7 +200,7 @@ async function sendSupportStatusEmail({ ticket, user }) {
     ticket.status === "in_process"
       ? "In Process"
       : ticket.status === "fixed"
-        ? "Fixed"
+        ? "Resolved"
         : "Pending";
 
   const subject = `[Money Trend] Ticket #${ticket.id} is now ${statusLabel}`;
@@ -208,7 +208,7 @@ async function sendSupportStatusEmail({ ticket, user }) {
     `Hi ${user.full_name || "there"},`,
     ``,
     `Your support ticket #${ticket.id} (${ticket.subject}) status was updated to: ${statusLabel}.`,
-    ticket.admin_note ? `\nAdmin note: ${ticket.admin_note}` : "",
+    ticket.admin_note ? `\nSupport reply: ${ticket.admin_note}` : "",
     ``,
     `— Money Trend Support (${supportInbox()})`,
   ].join("\n");
@@ -221,7 +221,11 @@ async function sendSupportStatusEmail({ ticket, user }) {
           <h2 style="margin:0 0 12px;font-family:Georgia,Times,serif;color:${BRAND.green};">Ticket update</h2>
           <p>Hi ${escapeHtml(user.full_name || "there")},</p>
           <p>Your support ticket <strong>#${ticket.id}</strong> (${escapeHtml(ticket.subject)}) is now <strong>${escapeHtml(statusLabel)}</strong>.</p>
-          ${ticket.admin_note ? `<p><strong>Admin note:</strong> ${escapeHtml(ticket.admin_note)}</p>` : ""}
+          ${
+            ticket.admin_note
+              ? `<p><strong>Support reply:</strong></p><p style="white-space:pre-wrap">${escapeHtml(ticket.admin_note)}</p>`
+              : ""
+          }
         </td>
       </tr>
     </table>
@@ -240,6 +244,105 @@ async function sendSupportStatusEmail({ ticket, user }) {
   });
 }
 
+async function sendSupportReplyEmail({ ticket, user, reply }) {
+  if (!user?.email) return { sent: false, reason: "no_user_email" };
+
+  const statusLabel =
+    ticket.status === "in_process"
+      ? "In Process"
+      : ticket.status === "fixed"
+        ? "Resolved"
+        : "Pending";
+
+  const replyText = String(reply || ticket.admin_note || "").trim();
+  const subject = `[Money Trend] Reply on your ticket #${ticket.id}`;
+  const text = [
+    `Hi ${user.full_name || "there"},`,
+    ``,
+    `Our support team replied to your ticket #${ticket.id} (${ticket.subject}).`,
+    `Current stage: ${statusLabel}`,
+    ``,
+    `Support guidance:`,
+    replyText,
+    ``,
+    `— Money Trend Support (${supportInbox()})`,
+  ].join("\n");
+
+  const { renderEmailLayout, BRAND, escapeHtml } = require("./email/templates/layout");
+  const bodyHtml = `
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:${BRAND.cream};">
+      <tr>
+        <td style="padding:28px;font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:${BRAND.text};">
+          <h2 style="margin:0 0 12px;font-family:Georgia,Times,serif;color:${BRAND.green};">Support reply</h2>
+          <p>Hi ${escapeHtml(user.full_name || "there")},</p>
+          <p>Our support team replied to your ticket <strong>#${ticket.id}</strong> (${escapeHtml(
+            ticket.subject || ""
+          )}).</p>
+          <p><strong>Current stage:</strong> ${escapeHtml(statusLabel)}</p>
+          <hr style="border:none;border-top:1px solid #E6D7B0;margin:16px 0;" />
+          <p><strong>Support guidance:</strong></p>
+          <p style="white-space:pre-wrap">${escapeHtml(replyText)}</p>
+        </td>
+      </tr>
+    </table>
+  `;
+
+  return sendEmail({
+    to: user.email,
+    subject,
+    text,
+    html: renderEmailLayout({
+      title: subject,
+      preheader: `Reply on ticket #${ticket.id}`,
+      bodyHtml,
+    }),
+    emailType: "support_reply",
+  });
+}
+
+async function sendSupportAssignedEmail({ ticket, user, agent }) {
+  if (!user?.email) return { sent: false, reason: "no_user_email" };
+
+  const agentName = agent?.full_name || "our support team";
+  const subject = `[Money Trend] Support agent assigned to ticket #${ticket.id}`;
+  const text = [
+    `Hi ${user.full_name || "there"},`,
+    ``,
+    `Your support ticket #${ticket.id} (${ticket.subject}) has been assigned to ${agentName}.`,
+    `They will guide you until your issue is resolved.`,
+    ``,
+    `— Money Trend Support (${supportInbox()})`,
+  ].join("\n");
+
+  const { renderEmailLayout, BRAND, escapeHtml } = require("./email/templates/layout");
+  const bodyHtml = `
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:${BRAND.cream};">
+      <tr>
+        <td style="padding:28px;font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:${BRAND.text};">
+          <h2 style="margin:0 0 12px;font-family:Georgia,Times,serif;color:${BRAND.green};">Support agent assigned</h2>
+          <p>Hi ${escapeHtml(user.full_name || "there")},</p>
+          <p>Your support ticket <strong>#${ticket.id}</strong> (${escapeHtml(
+            ticket.subject || ""
+          )}) has been assigned to <strong>${escapeHtml(agentName)}</strong>.</p>
+          <p>They will guide you until your issue is resolved.</p>
+        </td>
+      </tr>
+    </table>
+  `;
+
+  return sendEmail({
+    to: user.email,
+    subject,
+    text,
+    html: renderEmailLayout({
+      title: subject,
+      preheader: `Agent assigned to ticket #${ticket.id}`,
+      bodyHtml,
+    }),
+    emailType: "support_assigned",
+  });
+}
+
 module.exports = {
   supportInbox,
   sendEmail,
@@ -251,4 +354,6 @@ module.exports = {
   sendKycSubmittedEmail,
   sendSupportTicketEmail,
   sendSupportStatusEmail,
+  sendSupportReplyEmail,
+  sendSupportAssignedEmail,
 };

@@ -1,13 +1,17 @@
 const {
   SUPPORT_SUBJECTS,
   SUPPORT_STATUSES,
+  SUPPORT_STATUS_LABELS,
   SUPPORT_FAQS,
   SUPPORT_STATS,
   createTicket,
   listUserTickets,
   getUserTicket,
   listAdminTickets,
+  listSupportAgents,
+  assignTicket,
   updateTicketStatus,
+  replyToTicket,
 } = require("../services/supportService");
 
 function getHelpMeta(_req, res) {
@@ -19,6 +23,8 @@ function getHelpMeta(_req, res) {
       inbox: process.env.SUPPORT_EMAIL || "info@moneytrend.in",
       subjects: SUPPORT_SUBJECTS,
       statuses: SUPPORT_STATUSES,
+      status_labels: SUPPORT_STATUS_LABELS,
+      stages: SUPPORT_STATUS_LABELS,
       stats: SUPPORT_STATS,
       faqs: SUPPORT_FAQS,
       actions: {
@@ -114,9 +120,21 @@ async function getMyTicket(req, res) {
 
 async function adminListTickets(req, res) {
   try {
+    const isFullAdmin = req.user?.role === "admin";
     const data = await listAdminTickets({
       status: req.query.status,
       search: req.query.search || req.query.q,
+      // Sub-admin support agents only see tickets assigned to them
+      assignedTo: isFullAdmin
+        ? req.query.assigned_to || req.query.assignedTo || undefined
+        : req.user.id,
+      unassignedOnly:
+        isFullAdmin &&
+        ["1", "true", "yes"].includes(
+          String(req.query.unassigned || req.query.unassigned_only || "")
+            .trim()
+            .toLowerCase()
+        ),
       limit: req.query.limit,
       offset: req.query.offset,
     });
@@ -130,6 +148,70 @@ async function adminListTickets(req, res) {
     return res.status(500).json({
       success: false,
       message: "Failed to fetch support tickets",
+      error: error.message,
+    });
+  }
+}
+
+async function adminListSupportAgents(req, res) {
+  try {
+    const data = await listSupportAgents();
+    return res.json({
+      success: true,
+      message: "Customer support agents availability",
+      data,
+    });
+  } catch (error) {
+    console.error("[SUPPORT] agents list error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch support agents",
+      error: error.message,
+    });
+  }
+}
+
+async function adminAssignTicket(req, res) {
+  console.log("[SUPPORT] admin assign:", req.params.id, req.body);
+  try {
+    const agentId =
+      req.body.assigned_to ||
+      req.body.assignedTo ||
+      req.body.agent_id ||
+      req.body.agentId ||
+      req.body.support_id ||
+      req.body.supportId;
+
+    if (!agentId) {
+      return res.status(400).json({
+        success: false,
+        message: "assigned_to (customer support agent id) is required",
+      });
+    }
+
+    const result = await assignTicket({
+      ticketId: Number(req.params.id),
+      agentId: Number(agentId),
+      assignedBy: req.user.id,
+      notifyUser: true,
+    });
+
+    return res.json({
+      success: true,
+      message: "Ticket assigned to customer support. User notified by email.",
+      data: result,
+    });
+  } catch (error) {
+    if (error.code === "VALIDATION") {
+      return res.status(400).json({ success: false, message: error.message });
+    }
+    if (error.code === "NOT_FOUND") {
+      return res.status(404).json({ success: false, message: error.message });
+    }
+    console.error("[SUPPORT] assign error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to assign support ticket",
       error: error.message,
     });
   }
@@ -163,12 +245,12 @@ async function adminUpdateTicketStatus(req, res) {
     const ticket = await updateTicketStatus({
       ticketId: Number(req.params.id),
       status: req.body.status,
-      adminNote: req.body.admin_note || req.body.adminNote || req.body.note,
+      adminNote: req.body.admin_note || req.body.adminNote || req.body.note || req.body.reply,
       adminId: req.user.id,
     });
     return res.json({
       success: true,
-      message: "Support ticket status updated",
+      message: "Support ticket status updated. User notified by email.",
       data: { ticket },
     });
   } catch (error) {
@@ -177,6 +259,7 @@ async function adminUpdateTicketStatus(req, res) {
         success: false,
         message: error.message,
         allowed_statuses: SUPPORT_STATUSES,
+        status_labels: SUPPORT_STATUS_LABELS,
       });
     }
     if (error.code === "NOT_FOUND") {
@@ -191,6 +274,50 @@ async function adminUpdateTicketStatus(req, res) {
   }
 }
 
+async function adminReplyTicket(req, res) {
+  console.log("[SUPPORT] admin reply:", req.params.id, {
+    ...req.body,
+    reply: req.body?.reply || req.body?.description ? "[truncated]" : undefined,
+  });
+  try {
+    const result = await replyToTicket({
+      ticketId: Number(req.params.id),
+      reply:
+        req.body.reply ||
+        req.body.description ||
+        req.body.message ||
+        req.body.admin_note ||
+        req.body.adminNote ||
+        req.body.note,
+      status: req.body.status,
+      adminId: req.user.id,
+    });
+    return res.json({
+      success: true,
+      message: "Support reply saved and emailed to the user",
+      data: result,
+    });
+  } catch (error) {
+    if (error.code === "VALIDATION") {
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+        allowed_statuses: SUPPORT_STATUSES,
+        status_labels: SUPPORT_STATUS_LABELS,
+      });
+    }
+    if (error.code === "NOT_FOUND") {
+      return res.status(404).json({ success: false, message: error.message });
+    }
+    console.error("[SUPPORT] admin reply error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to reply to support ticket",
+      error: error.message,
+    });
+  }
+}
+
 module.exports = {
   getHelpMeta,
   submitTicket,
@@ -198,5 +325,8 @@ module.exports = {
   getMyTicket,
   adminListTickets,
   adminGetTicket,
+  adminListSupportAgents,
+  adminAssignTicket,
   adminUpdateTicketStatus,
+  adminReplyTicket,
 };

@@ -10,6 +10,7 @@ const {
   maxInvestableFromBalance,
 } = require("../services/walletService");
 const { resolveBankLogo } = require("../services/banks/bankLogos");
+const { safeNotify, notifyUser, notifyAdmins } = require("../services/notificationService");
 
 function withBankLogo(row) {
   const logo = resolveBankLogo({
@@ -270,6 +271,25 @@ async function addFd(req, res) {
       meta: { bankName, principal, interestRate, commission: walletResult.commission, invest_all: investAll },
     });
 
+    safeNotify(async () => {
+      await notifyUser(userId, {
+        eventType: "fd_booked",
+        title: "FD investment successful",
+        body: `You invested ₹${principal} in FD at ${bankName}.`,
+        referenceType: "fd",
+        referenceId: result.insertId,
+        meta: { bank_name: bankName, principal, interest_rate: interestRate },
+      });
+      await notifyAdmins({
+        eventType: "fd_booked",
+        title: `New FD investment #${result.insertId}`,
+        body: `User #${userId} invested ₹${principal} at ${bankName}.`,
+        referenceType: "fd",
+        referenceId: result.insertId,
+        meta: { user_id: userId, principal },
+      });
+    });
+
     return res.status(201).json({
       success: true,
       message: "FD invested from wallet successfully",
@@ -439,6 +459,25 @@ async function addRd(req, res) {
       meta: { bankName, monthlyAmount, interestRate, commission: walletResult.commission, invest_all: investAll },
     });
 
+    safeNotify(async () => {
+      await notifyUser(userId, {
+        eventType: "rd_booked",
+        title: "RD investment successful",
+        body: `You started an RD at ${bankName} with ₹${monthlyAmount}/month.`,
+        referenceType: "rd",
+        referenceId: result.insertId,
+        meta: { bank_name: bankName, monthly_amount: monthlyAmount },
+      });
+      await notifyAdmins({
+        eventType: "rd_booked",
+        title: `New RD investment #${result.insertId}`,
+        body: `User #${userId} booked RD at ${bankName}.`,
+        referenceType: "rd",
+        referenceId: result.insertId,
+        meta: { user_id: userId, monthly_amount: monthlyAmount },
+      });
+    });
+
     return res.status(201).json({
       success: true,
       message: "RD booked — first instalment deducted from wallet",
@@ -529,6 +568,17 @@ async function breakFd(req, res) {
       meta: settlement,
     });
 
+    safeNotify(async () => {
+      await notifyUser(userId, {
+        eventType: "fd_broken",
+        title: "FD closed / settled",
+        body: `Your FD #${id} was closed. Settlement credited to wallet.`,
+        referenceType: "fd",
+        referenceId: id,
+        meta: settlement,
+      });
+    });
+
     return res.json({
       success: true,
       message: "FD broken. Settlement credited to wallet.",
@@ -607,6 +657,17 @@ async function breakRd(req, res) {
       ipAddress: req.ip,
       userAgent: req.headers["user-agent"],
       meta: settlement,
+    });
+
+    safeNotify(async () => {
+      await notifyUser(userId, {
+        eventType: "rd_broken",
+        title: "RD closed / settled",
+        body: `Your RD #${id} was closed. Settlement credited to wallet.`,
+        referenceType: "rd",
+        referenceId: id,
+        meta: settlement,
+      });
     });
 
     return res.json({

@@ -15,6 +15,11 @@ const STAFF_PERMISSIONS = [
     label: "News Management",
     description: "Create/edit news (Sub Admin posts need Admin approval)",
   },
+  {
+    key: "support",
+    label: "Customer Support",
+    description: "View user issues, reply by email, update ticket status (pending / in process / resolved)",
+  },
 ];
 
 const PERMISSION_KEYS = STAFF_PERMISSIONS.map((p) => p.key);
@@ -40,6 +45,15 @@ function normalizePermissions(input) {
           if (key === "seo_management" || key === "seo") return "seo";
           if (key === "blog_management" || key === "blogs" || key === "blog") return "blog";
           if (key === "news_management" || key === "news") return "news";
+          if (
+            key === "support" ||
+            key === "customer_support" ||
+            key === "support_panel" ||
+            key === "tickets" ||
+            key === "helpdesk"
+          ) {
+            return "support";
+          }
           return key;
         })
         .filter((key) => PERMISSION_KEYS.includes(key))
