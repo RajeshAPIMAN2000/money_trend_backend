@@ -165,6 +165,23 @@ async function createSubAdmin(req, res) {
   }
 }
 
+function parseOptionalActive(body) {
+  const raw =
+    body.staff_active != null
+      ? body.staff_active
+      : body.active != null
+        ? body.active
+        : body.is_active != null
+          ? body.is_active
+          : undefined;
+  if (raw === undefined || raw === null || raw === "") return undefined;
+  if (typeof raw === "boolean") return raw;
+  const value = String(raw).trim().toLowerCase();
+  if (["1", "true", "yes", "active"].includes(value)) return true;
+  if (["0", "false", "no", "inactive"].includes(value)) return false;
+  return undefined;
+}
+
 async function updateSubAdmin(req, res) {
   try {
     const id = Number(req.params.id);
@@ -176,39 +193,49 @@ async function updateSubAdmin(req, res) {
       return res.status(404).json({ success: false, message: "Sub-admin not found" });
     }
 
-    const fullName =
-      req.body.full_name != null || req.body.fullName != null
-        ? sanitizeText(req.body.full_name || req.body.fullName, 150)
-        : existing[0].full_name;
-    const email =
-      req.body.email != null
-        ? String(req.body.email).trim().toLowerCase()
-        : existing[0].email;
-    const phone =
-      req.body.phone != null || req.body.mobile != null
-        ? String(req.body.phone || req.body.mobile).replace(/\s+/g, "").trim()
-        : existing[0].phone;
-    const roles =
-      req.body.roles != null || req.body.permissions != null
-        ? normalizePermissions(req.body.roles || req.body.permissions)
-        : parsePermissionsJson(existing[0].staff_permissions);
-    const staffActive =
-      req.body.staff_active != null || req.body.active != null
-        ? Boolean(req.body.staff_active ?? req.body.active)
-        : existing[0].staff_active == null
-          ? true
-          : Boolean(existing[0].staff_active);
+    const current = existing[0];
+    const body = req.body || {};
 
-    if (!isValidEmail(email)) {
+    const nameInput = body.full_name ?? body.fullName ?? body.name;
+    const fullName =
+      nameInput != null && String(nameInput).trim()
+        ? sanitizeText(nameInput, 150)
+        : current.full_name;
+
+    const email =
+      body.email != null && String(body.email).trim()
+        ? String(body.email).trim().toLowerCase()
+        : current.email;
+
+    const phoneInput = body.phone ?? body.mobile ?? body.phone_number;
+    const phone =
+      phoneInput != null && String(phoneInput).trim()
+        ? String(phoneInput).replace(/\s+/g, "").trim()
+        : current.phone;
+
+    const rolesSent = body.roles != null || body.permissions != null;
+    const roles = rolesSent
+      ? normalizePermissions(body.roles ?? body.permissions)
+      : parsePermissionsJson(current.staff_permissions);
+
+    const activeInput = parseOptionalActive(body);
+    const staffActive =
+      activeInput === undefined
+        ? current.staff_active == null
+          ? true
+          : Boolean(current.staff_active)
+        : activeInput;
+
+    if (body.email != null && String(body.email).trim() && !isValidEmail(email)) {
       return res.status(400).json({ success: false, message: "Invalid email" });
     }
-    if (!isValidPhone(phone)) {
+    if (phoneInput != null && String(phoneInput).trim() && !isValidPhone(phone)) {
       return res.status(400).json({ success: false, message: "Invalid phone" });
     }
-    if (!roles.length) {
+    if (rolesSent && !roles.length) {
       return res.status(400).json({
         success: false,
-        message: "Assign at least one role: seo, blog, news, support",
+        message: "roles must include at least one of: seo, blog, news, support",
       });
     }
 
@@ -223,27 +250,6 @@ async function updateSubAdmin(req, res) {
       });
     }
 
-    const updates = {
-      fullName,
-      email,
-      phone,
-      perms: JSON.stringify(roles),
-      staffActive: staffActive ? 1 : 0,
-      id,
-    };
-
-    let passwordSql = "";
-    if (req.body.password) {
-      if (String(req.body.password).length < 6) {
-        return res.status(400).json({
-          success: false,
-          message: "Password must be at least 6 characters",
-        });
-      }
-      updates.passwordHash = await bcrypt.hash(String(req.body.password), 10);
-      passwordSql = `, password_hash = :passwordHash`;
-    }
-
     await pool.query(
       `UPDATE users
        SET full_name = :fullName,
@@ -251,9 +257,15 @@ async function updateSubAdmin(req, res) {
            phone = :phone,
            staff_permissions = :perms,
            staff_active = :staffActive
-           ${passwordSql}
        WHERE id = :id AND role = 'sub_admin'`,
-      updates
+      {
+        fullName,
+        email,
+        phone,
+        perms: JSON.stringify(roles),
+        staffActive: staffActive ? 1 : 0,
+        id,
+      }
     );
 
     await writeAuditLog({
