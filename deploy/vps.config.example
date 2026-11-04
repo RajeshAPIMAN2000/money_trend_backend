@@ -1,0 +1,5 @@
+# Optional — copy to vps.config and fill in (gitignored)
+VPS_HOST=YOUR_VPS_IP
+VPS_USER=root
+VPS_PORT=22
+APP_ROOT=/var/www/moneytrend
