@@ -1,5 +1,6 @@
 const {
   createTestimonial,
+  getUserTestimonial,
   listPublicTestimonials,
   listAdminTestimonials,
   deleteTestimonial,
@@ -55,6 +56,16 @@ async function createUserTestimonial(req, res) {
   }
 }
 
+/** GET /testimonials/me — authenticated user's latest testimonial */
+async function getMyTestimonial(req, res) {
+  try {
+    const data = await getUserTestimonial(req.user.id);
+    return res.json({ success: true, data });
+  } catch (error) {
+    return handleTestimonialError(res, error, "Failed to fetch your testimonial");
+  }
+}
+
 /** GET /api/admin/testimonials */
 async function adminListTestimonials(req, res) {
   try {
@@ -90,6 +101,7 @@ async function adminDeleteTestimonial(req, res) {
 module.exports = {
   listTestimonialsPublic,
   createUserTestimonial,
+  getMyTestimonial,
   adminListTestimonials,
   adminDeleteTestimonial,
 };

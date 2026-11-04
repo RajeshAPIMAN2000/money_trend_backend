@@ -33,6 +33,7 @@ const seoRoutes = require("./routes/seo");
 const demoRoutes = require("./routes/demo");
 const goalsRoutes = require("./routes/goals");
 const testimonialsRoutes = require("./routes/testimonials");
+const visitorsRoutes = require("./routes/visitors");
 const notificationsRoutes = require("./routes/notifications");
 const { serveSitemap, serveRobots } = require("./controllers/seoController");
 const {
@@ -92,6 +93,7 @@ function mountApiRoutes(basePath = "") {
   app.use(route("/demo"), demoRoutes);
   app.use(route("/goals"), goalsRoutes);
   app.use(route("/testimonials"), testimonialsRoutes);
+  app.use(route("/visitors"), visitorsRoutes);
   app.use(route("/notifications"), notificationsRoutes);
   app.get(route("/health"), (_req, res) => {
     res.json(healthPayload());
@@ -107,6 +109,10 @@ app.use(
     origin: parseFrontendOrigins(),
     credentials: true,
   })
+);
+app.use(
+  ["/api/payments/civil-score/webhook", "/payments/civil-score/webhook"],
+  express.raw({ type: "application/json" })
 );
 app.use(express.json({ limit: "5mb" }));
 app.use(express.urlencoded({ extended: true }));
@@ -200,6 +206,7 @@ app.get(["/api", "/api/"], (_req, res) => {
       "/api/demo",
       "/api/goals",
       "/api/testimonials",
+      "/api/visitors",
       "/api/banners",
     ],
     docs: "/api-docs",

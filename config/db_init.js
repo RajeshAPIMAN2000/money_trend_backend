@@ -649,6 +649,11 @@ async function ensureCoreTables() {
   `);
 
   await addColumnIfMissing(pool, "articles", "category", "category VARCHAR(100) NULL AFTER description");
+  try {
+    await pool.query(`ALTER TABLE articles MODIFY COLUMN description LONGTEXT NOT NULL`);
+  } catch (e) {
+    console.warn("[DB] articles.description LONGTEXT migrate:", e.message);
+  }
   // Expand status for Sub Admin → Admin approval workflow (existing DBs)
   try {
     await pool.query(
@@ -807,6 +812,18 @@ async function ensureCoreTables() {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS visitor_hits (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      device_id VARCHAR(64) NOT NULL,
+      path VARCHAR(255) NOT NULL DEFAULT '/',
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_visitor_hits_created (created_at),
+      KEY idx_visitor_hits_device (device_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS equifax_enrollments (
       id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
       user_id INT UNSIGNED NOT NULL,
@@ -905,6 +922,57 @@ async function ensureCoreTables() {
       CONSTRAINT fk_dummy_pay_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS civil_score_payments (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      user_id INT UNSIGNED NULL,
+      report_ref VARCHAR(100) NOT NULL,
+      provider VARCHAR(50) NOT NULL DEFAULT 'TransUnion CIBIL',
+      amount_paise INT UNSIGNED NOT NULL DEFAULT 9900,
+      currency CHAR(3) NOT NULL DEFAULT 'INR',
+      razorpay_order_id VARCHAR(100) NULL UNIQUE,
+      razorpay_payment_id VARCHAR(100) NULL UNIQUE,
+      razorpay_signature VARCHAR(255) NULL,
+      payment_status ENUM('created','pending','authorized','success','failed','cancelled','refunded','partially_refunded') NOT NULL DEFAULT 'created',
+      verification_status ENUM('pending','verified','rejected') NOT NULL DEFAULT 'pending',
+      report_downloaded TINYINT(1) NOT NULL DEFAULT 0,
+      download_count INT UNSIGNED NOT NULL DEFAULT 0,
+      first_downloaded_at DATETIME NULL,
+      last_downloaded_at DATETIME NULL,
+      failure_reason TEXT NULL,
+      refund_amount_paise INT UNSIGNED NOT NULL DEFAULT 0,
+      admin_notes TEXT NULL,
+      verified_by BIGINT UNSIGNED NULL,
+      verified_at DATETIME NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_civil_user (user_id),
+      KEY idx_civil_report (report_ref),
+      KEY idx_civil_payment_status (payment_status),
+      KEY idx_civil_created (created_at),
+      CONSTRAINT fk_civil_score_pay_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+  await addColumnIfMissing(
+    pool,
+    "civil_score_payments",
+    "razorpay_qr_code_id",
+    "razorpay_qr_code_id VARCHAR(100) NULL AFTER razorpay_order_id"
+  );
+  await addColumnIfMissing(
+    pool,
+    "civil_score_payments",
+    "qr_code_image_url",
+    "qr_code_image_url VARCHAR(1000) NULL AFTER razorpay_qr_code_id"
+  );
+  await addColumnIfMissing(
+    pool,
+    "civil_score_payments",
+    "qr_code_expires_at",
+    "qr_code_expires_at DATETIME NULL AFTER qr_code_image_url"
+  );
 
   try {
     await pool.query(

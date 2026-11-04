@@ -1,5 +1,6 @@
 const pool = require("../config/db");
 const { sanitizeText } = require("../utils/validators");
+const { sanitizeArticleHtml } = require("../utils/articleHtml");
 const { writeAuditLog } = require("../utils/audit");
 const { isFullAdmin } = require("./staffPermissionService");
 const {
@@ -124,6 +125,7 @@ function mapArticle(row, { includeStatus = false } = {}) {
     heading: row.heading,
     title: row.heading,
     description: row.description,
+    content: row.description,
     category: row.category || null,
     image: formatImageUrl(row.image),
     author_id: row.created_by != null ? Number(row.created_by) : null,
@@ -161,7 +163,16 @@ const ARTICLE_FROM = `
 function validateArticleInput(body, { requireImage = false, isUpdate = false } = {}) {
   const errors = [];
   const heading = sanitizeText(body.heading || body.title, 255);
-  const description = sanitizeText(body.description || body.content, 10000);
+  const rawContent = body.description != null ? body.description : body.content;
+  let description = "";
+  if (rawContent != null && typeof rawContent !== "string") {
+    errors.push("content must be an HTML string");
+  } else if (typeof rawContent === "string") {
+    description = sanitizeArticleHtml(rawContent);
+    if (rawContent.trim() && !description) {
+      errors.push("content has no allowed HTML after removing unsafe markup");
+    }
+  }
   const category = extractCategory(body);
   // type is ALWAYS forced by the route (blog vs news) — ignore body.type to prevent mix-ups
   const statusRaw = body.status != null ? String(body.status).toLowerCase() : null;
@@ -698,6 +709,8 @@ module.exports = {
   ARTICLE_CATEGORIES,
   extractCategory,
   formatImageUrl,
+  mapArticle,
+  validateArticleInput,
   listPublished,
   getPublishedById,
   listAdmin,

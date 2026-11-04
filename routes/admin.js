@@ -118,6 +118,7 @@ const {
   markAllNotificationsRead,
 } = require("../controllers/notificationController");
 const { upload } = require("../middleware/upload");
+const { listAdminCivilScorePayments } = require("../controllers/adminCivilScorePaymentController");
 
 const router = express.Router();
 
@@ -204,6 +205,7 @@ router.get("/investments/orders", listAdminOrders);
 router.get("/investments/orders/:id", getAdminOrderById);
 router.get("/investments/transactions", listAdminTransactionHistory);
 router.get("/investments/transactions/:id", getAdminTransactionById);
+router.get("/civil-score-payments", listAdminCivilScorePayments);
 router.get("/investments/fund-performance/banks/:bankId", getAdminFundPerformanceByBankId);
 router.get("/investments/fund-performance", getAdminFundPerformance);
 router.get("/investments/asset-allocation/fd", getAdminFdAssetAllocation);

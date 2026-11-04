@@ -64,6 +64,23 @@ async function createTestimonial(userId, body) {
   return formatPublicTestimonial(rows[0]);
 }
 
+async function getUserTestimonial(userId) {
+  const [rows] = await pool.query(
+    `SELECT t.id, t.rating, t.description, t.created_at, u.full_name, u.profile_image
+     FROM testimonials t
+     JOIN users u ON u.id = t.user_id
+     WHERE t.user_id = :userId
+     ORDER BY t.id DESC
+     LIMIT 1`,
+    { userId }
+  );
+
+  return {
+    has_submitted: rows.length > 0,
+    testimonial: rows.length ? formatPublicTestimonial(rows[0]) : null,
+  };
+}
+
 async function listPublicTestimonials({ limit = 20, offset = 0 } = {}) {
   const safeLimit = Math.min(Math.max(Number(limit) || 20, 1), 100);
   const safeOffset = Math.max(Number(offset) || 0, 0);
@@ -148,6 +165,7 @@ async function deleteTestimonial(id) {
 
 module.exports = {
   createTestimonial,
+  getUserTestimonial,
   listPublicTestimonials,
   listAdminTestimonials,
   deleteTestimonial,
