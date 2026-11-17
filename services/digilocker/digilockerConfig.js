@@ -4,7 +4,10 @@
  * MoneyTrend partner registration (PROD):
  * - Client ID: BN6CF9DE38
  * - Issuer ID: in.moneytrend
- * - Callback: https://moneytrend.in/api/digilocker/callback
+ * - Callback (must match DigiLocker partner portal exactly):
+ *   https://moneytrend.in/api/digilocker/callback
+ * - Frontend (production): https://www.moneytrend.in
+ * - Local frontend testing: http://localhost:5173
  * - Authorize: /public/oauth2/2/authorize (partner-confirmed for this client)
  * - Token: /public/oauth2/2/token
  *
@@ -62,12 +65,16 @@ function getDigilockerConfig() {
   // JWKS for id_token signature — outstanding partner requirement until URL is provided.
   const jwksUrl = String(process.env.DIGILOCKER_JWKS_URL || "").trim() || null;
 
-  const frontendBase = trimSlash(
+  // Prefer explicit DigiLocker frontend base. If FRONTEND_ORIGIN is a CSV, take the first entry.
+  const frontendOriginRaw = String(
     process.env.DIGILOCKER_FRONTEND_BASE_URL ||
       process.env.FRONTEND_ORIGIN ||
       process.env.CLIENT_ORIGIN ||
-      "https://moneytrend.in"
-  );
+      "https://www.moneytrend.in"
+  )
+    .split(",")[0]
+    .trim();
+  const frontendBase = trimSlash(frontendOriginRaw);
 
   const successUrl = String(
     process.env.DIGILOCKER_FRONTEND_SUCCESS_URL ||

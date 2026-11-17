@@ -9,8 +9,9 @@ Production-oriented DigiLocker / Meri Pehchaan OAuth 2.0 + PKCE (S256) integrati
 | Client ID | `BN6CF9DE38` |
 | Issuer ID | `in.moneytrend` |
 | Application | MoneyTrend Financial Services Platform \| PROD |
-| Registered domain | `https://www.moneytrend.in` |
-| Callback | `https://moneytrend.in/api/digilocker/callback` |
+| Registered domain / frontend | `https://www.moneytrend.in` (also `https://moneytrend.in`) |
+| Local frontend | `http://localhost:5173` |
+| Callback | `https://moneytrend.in/api/digilocker/callback` (exact partner portal match) |
 | Authorize (partner default) | `/public/oauth2/2/authorize` |
 | Token | `/public/oauth2/2/token` |
 | User details | `/public/oauth2/1/user` |
