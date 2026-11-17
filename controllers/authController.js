@@ -608,7 +608,8 @@ async function login(req, res) {
     }
 
     const [rows] = await pool.query(
-      `SELECT id, full_name, email, phone, password_hash, kyc_status, profile_image, role, email_verified_at
+      `SELECT id, full_name, email, phone, password_hash, kyc_status, profile_image, role, email_verified_at,
+              account_status
        FROM users WHERE email = :email LIMIT 1`,
       { email }
     );
@@ -618,7 +619,7 @@ async function login(req, res) {
     }
 
     const user = rows[0];
-    if (user.role === "admin") {
+    if (user.role === "admin" || user.role === "sub_admin") {
       return res.status(403).json({
         success: false,
         message: "Please use admin login endpoint",
@@ -629,6 +630,16 @@ async function login(req, res) {
     const matched = await bcrypt.compare(password, user.password_hash);
     if (!matched) {
       return res.status(401).json({ success: false, message: "Invalid email or password", errorCode: "INVALID_CREDENTIALS" });
+    }
+
+    const accountStatus = String(user.account_status || "active").toLowerCase();
+    if (accountStatus === "inactive") {
+      return res.status(403).json({
+        success: false,
+        message: "Your account is inactive. Please contact support or an admin to reactivate.",
+        errorCode: "ACCOUNT_INACTIVE",
+        account_status: "inactive",
+      });
     }
 
     const requireLoginOtp = String(process.env.EMAIL_OTP_LOGIN_REQUIRED || "true").toLowerCase() !== "false";
@@ -649,6 +660,19 @@ async function login(req, res) {
       }
     }
 
+    let reactivated = false;
+    if (accountStatus === "deactivated") {
+      const {
+        reactivateIfDeactivated,
+      } = require("../services/accountStatusService");
+      const result = await reactivateIfDeactivated(user.id, {
+        ipAddress: req.ip,
+        userAgent: req.headers["user-agent"],
+      });
+      reactivated = Boolean(result.reactivated);
+      user.account_status = "active";
+    }
+
     const tokens = issueTokens(user, res);
     await storeRefreshToken(user.id, tokens.refreshToken);
 
@@ -659,7 +683,9 @@ async function login(req, res) {
 
     return res.json({
       success: true,
-      message: "Login successful",
+      message: reactivated
+        ? "Account reactivated. Login successful"
+        : "Login successful",
       data: {
         user: {
           id: user.id,
@@ -670,8 +696,10 @@ async function login(req, res) {
           email_verified: Boolean(user.email_verified_at),
           kyc_status: user.kyc_status,
           profile_image: user.profile_image,
+          account_status: "active",
         },
         kyc,
+        account_reactivated: reactivated,
         accessToken: tokens.accessToken,
         refreshToken: tokens.refreshToken,
         next_step: nextStep,
@@ -705,10 +733,10 @@ async function sendLoginOtpFlow(req, res) {
   }
 
   const [rows] = await pool.query(
-    `SELECT id, full_name, email, password_hash, role FROM users WHERE email = :email LIMIT 1`,
+    `SELECT id, full_name, email, password_hash, role, account_status FROM users WHERE email = :email LIMIT 1`,
     { email }
   );
-  if (!rows.length || rows[0].role === "admin") {
+  if (!rows.length || rows[0].role === "admin" || rows[0].role === "sub_admin") {
     return res.status(401).json({
       success: false,
       message: "Invalid email or password",
@@ -723,6 +751,17 @@ async function sendLoginOtpFlow(req, res) {
       success: false,
       message: "Invalid email or password",
       errorCode: "INVALID_CREDENTIALS",
+      data: { sent: false, purpose: "LOGIN_VERIFICATION" },
+    });
+  }
+
+  // Admin-inactivated users cannot receive login OTP / reactivate themselves
+  if (String(rows[0].account_status || "active").toLowerCase() === "inactive") {
+    return res.status(403).json({
+      success: false,
+      message: "Your account is inactive. Please contact support.",
+      errorCode: "ACCOUNT_INACTIVE",
+      account_status: "inactive",
       data: { sent: false, purpose: "LOGIN_VERIFICATION" },
     });
   }

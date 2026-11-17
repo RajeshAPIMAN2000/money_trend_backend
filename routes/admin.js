@@ -36,6 +36,8 @@ const {
   upsertUserKyc,
   upsertUserNominee,
   updateUserKycStatus,
+  updateUserAccountStatus,
+  deleteUserAccount,
   listWithdrawals,
   processWithdrawal,
   getUserBankAccountAdmin,
@@ -221,6 +223,8 @@ router.put("/users/:id/kyc", upload.any(), upsertUserKyc);
 router.post("/users/:id/nominee", upload.any(), upsertUserNominee);
 router.put("/users/:id/nominee", upload.any(), upsertUserNominee);
 router.patch("/users/:id/kyc-status", updateUserKycStatus);
+router.patch("/users/:id/account-status", updateUserAccountStatus);
+router.delete("/users/:id", deleteUserAccount);
 
 router.get("/users/:id/bank-account", getUserBankAccountAdmin);
 router.get("/users/:id/goals", adminListUserGoals);

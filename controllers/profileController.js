@@ -120,7 +120,8 @@ async function getProfile(req, res) {
     const userId = req.user.id;
 
     const [users] = await pool.query(
-      `SELECT id, full_name, email, phone, profile_image, role, kyc_status, kyc_method, created_at, updated_at
+      `SELECT id, full_name, email, phone, profile_image, role, kyc_status, kyc_method,
+              account_status, account_status_changed_at, created_at, updated_at
        FROM users WHERE id = :userId LIMIT 1`,
       { userId }
     );
@@ -162,6 +163,8 @@ async function getProfile(req, res) {
         pan_number: kyc?.pan_number || null,
         kyc_status: user.kyc_status,
         kyc_method: user.kyc_method,
+        account_status: user.account_status || "active",
+        account_status_changed_at: user.account_status_changed_at || null,
         kyc,
         nominee: nominee || {
           added: false,
@@ -553,8 +556,52 @@ async function updateProfile(req, res) {
   }
 }
 
+/**
+ * User temporarily deactivates their own account.
+ * They stop receiving campaign/notification emails until they log in again
+ * with email + password (reactivates account).
+ */
+async function deactivateOwnAccount(req, res) {
+  try {
+    const { setAccountStatus, DEACTIVATED } = require("../services/accountStatusService");
+    const reason = String(req.body?.reason || "User requested temporary deactivation").trim();
+    const result = await setAccountStatus({
+      userId: req.user.id,
+      status: DEACTIVATED,
+      reason,
+      actorUserId: req.user.id,
+      ipAddress: req.ip,
+      userAgent: req.headers["user-agent"],
+      source: "user_self",
+    });
+
+    // Clear auth cookies if any
+    try {
+      res.clearCookie("accessToken");
+      res.clearCookie("refreshToken");
+    } catch (_e) {
+      /* ignore */
+    }
+
+    return res.json({
+      success: true,
+      message:
+        "Account deactivated. You will not receive emails until you sign in again with email and password to reactivate.",
+      data: result,
+    });
+  } catch (error) {
+    console.error("[PROFILE] deactivate error:", error);
+    return res.status(error.status || 500).json({
+      success: false,
+      message: error.message || "Failed to deactivate account",
+      errorCode: error.code || "DEACTIVATE_FAILED",
+    });
+  }
+}
+
 module.exports = {
   getProfile,
   getUserPortfolio,
   updateProfile,
+  deactivateOwnAccount,
 };

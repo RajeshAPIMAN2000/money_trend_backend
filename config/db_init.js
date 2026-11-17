@@ -70,6 +70,25 @@ async function ensureCoreTables() {
     "staff_active",
     "staff_active TINYINT(1) NOT NULL DEFAULT 1"
   );
+  // active = normal; deactivated = user self-pause; inactive = admin-disabled
+  await addColumnIfMissing(
+    pool,
+    "users",
+    "account_status",
+    "account_status ENUM('active','inactive','deactivated') NOT NULL DEFAULT 'active'"
+  );
+  await addColumnIfMissing(
+    pool,
+    "users",
+    "account_status_changed_at",
+    "account_status_changed_at DATETIME NULL"
+  );
+  await addColumnIfMissing(
+    pool,
+    "users",
+    "account_status_reason",
+    "account_status_reason VARCHAR(255) NULL"
+  );
 
   try {
     await pool.query(
@@ -77,6 +96,13 @@ async function ensureCoreTables() {
     );
   } catch (err) {
     console.warn("[DB] users.role ENUM widen skipped:", err.message);
+  }
+  try {
+    await pool.query(
+      `ALTER TABLE users MODIFY COLUMN account_status ENUM('active','inactive','deactivated') NOT NULL DEFAULT 'active'`
+    );
+  } catch (err) {
+    console.warn("[DB] users.account_status ENUM widen skipped:", err.message);
   }
 
   await pool.query(`

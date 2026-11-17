@@ -124,7 +124,8 @@ async function listRegisteredUserIds() {
   const [rows] = await pool.query(
     `SELECT id FROM users
      WHERE role = 'user'
-       AND email IS NOT NULL AND email <> ''`
+       AND email IS NOT NULL AND email <> ''
+       AND (account_status IS NULL OR account_status = 'active')`
   );
   return rows.map((r) => r.id);
 }

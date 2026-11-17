@@ -5,6 +5,7 @@ const {
   getProfile,
   getUserPortfolio,
   updateProfile,
+  deactivateOwnAccount,
 } = require("../controllers/profileController");
 const {
   upsertBankAccount,
@@ -17,6 +18,9 @@ router.use(authenticate);
 
 // User profile
 router.get("/", getProfile);
+
+// Temporary self-deactivation (reactivate by logging in with email + password)
+router.post("/deactivate", deactivateOwnAccount);
 
 // User portfolio (FD + RD summary)
 router.get("/portfolio", getUserPortfolio);

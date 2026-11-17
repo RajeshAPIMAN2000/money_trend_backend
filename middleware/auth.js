@@ -6,7 +6,7 @@ const {
   parsePermissionsJson,
 } = require("../services/staffPermissionService");
 
-function authenticate(req, res, next) {
+async function authenticate(req, res, next) {
   try {
     const header = req.headers.authorization || "";
     const bearer = header.startsWith("Bearer ") ? header.slice(7) : null;
@@ -29,6 +29,40 @@ function authenticate(req, res, next) {
         ? decoded.permissions
         : parsePermissionsJson(decoded.permissions),
     };
+
+    // Block non-active end-user sessions (admin-inactive or self-deactivated)
+    if ((req.user.role || "user") === "user") {
+      try {
+        const pool = require("../config/db");
+        const [rows] = await pool.query(
+          `SELECT account_status FROM users WHERE id = :id AND role = 'user' LIMIT 1`,
+          { id: req.user.id }
+        );
+        if (!rows.length) {
+          return res.status(401).json({
+            success: false,
+            message: "Account not found",
+            errorCode: "ACCOUNT_NOT_FOUND",
+          });
+        }
+        const status = String(rows[0].account_status || "active").toLowerCase();
+        if (status !== "active") {
+          return res.status(403).json({
+            success: false,
+            message:
+              status === "inactive"
+                ? "Your account is inactive. Please contact support."
+                : "Your account is deactivated. Sign in again with email and password to reactivate.",
+            errorCode: status === "inactive" ? "ACCOUNT_INACTIVE" : "ACCOUNT_DEACTIVATED",
+            account_status: status,
+          });
+        }
+        req.user.account_status = status;
+      } catch (_dbErr) {
+        // If column missing before migration, allow request
+      }
+    }
+
     return next();
   } catch (_error) {
     return res.status(401).json({

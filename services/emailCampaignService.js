@@ -50,6 +50,7 @@ async function listRegisteredUserEmails() {
        AND email IS NOT NULL
        AND email <> ''
        AND (staff_active IS NULL OR staff_active = 1)
+       AND (account_status IS NULL OR account_status = 'active')
      ORDER BY id ASC`
   );
   return rows;

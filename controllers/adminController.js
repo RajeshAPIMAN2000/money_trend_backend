@@ -248,7 +248,8 @@ async function listUsers(req, res) {
     const [rows] = await pool.query(
       `SELECT
          u.id, u.full_name, u.email, u.phone, u.profile_image, u.role,
-         u.kyc_status, u.kyc_method, u.created_at, u.updated_at,
+         u.kyc_status, u.kyc_method, u.account_status, u.account_status_changed_at,
+         u.account_status_reason, u.created_at, u.updated_at,
          k.method AS kyc_doc_method, k.status AS kyc_doc_status,
          k.pan_number, k.pan_full_name, k.pan_image,
          k.aadhaar_number, k.aadhaar_image, k.digilocker_ref,
@@ -300,6 +301,9 @@ async function listUsers(req, res) {
         role: row.role,
         kyc_status: row.kyc_status,
         kyc_method: row.kyc_method,
+        account_status: row.account_status || "active",
+        account_status_changed_at: row.account_status_changed_at || null,
+        account_status_reason: row.account_status_reason || null,
         created_at: row.created_at,
         updated_at: row.updated_at,
         digilocker: digilockerRow,
@@ -383,6 +387,7 @@ async function getUserById(req, res) {
       `SELECT id, full_name, email, phone,
               DATE_FORMAT(date_of_birth, '%Y-%m-%d') AS date_of_birth,
               profile_image, role, kyc_status, kyc_method, email_verified_at,
+              account_status, account_status_changed_at, account_status_reason,
               created_at, updated_at
        FROM users WHERE id = :userId AND role = 'user' LIMIT 1`,
       { userId }
@@ -585,6 +590,87 @@ async function upsertUserNominee(req, res) {
     });
   } catch (error) {
     return handleAdminOnboardingError(res, error, "Failed to save nominee");
+  }
+}
+
+/**
+ * Admin sets user account to inactive or active.
+ * Body: { status: "inactive" | "active", reason?: string }
+ */
+async function updateUserAccountStatus(req, res) {
+  try {
+    const userId = Number(req.params.id);
+    if (!userId) {
+      return res.status(400).json({ success: false, message: "Valid user id is required" });
+    }
+
+    const raw = String(req.body?.status || "").trim().toLowerCase();
+    const reason = String(req.body?.reason || "").trim() || null;
+    let status = null;
+    if (raw === "active" || raw === "activate" || raw === "enabled") status = "active";
+    else if (raw === "inactive" || raw === "inactivate" || raw === "disable" || raw === "disabled") {
+      status = "inactive";
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: 'status must be "active" or "inactive"',
+      });
+    }
+
+    const { setAccountStatus } = require("../services/accountStatusService");
+    const result = await setAccountStatus({
+      userId,
+      status,
+      reason: reason || (status === "inactive" ? "Inactivated by admin" : "Activated by admin"),
+      actorUserId: req.user.id,
+      ipAddress: req.ip,
+      userAgent: req.headers["user-agent"],
+      source: "admin",
+    });
+
+    return res.json({
+      success: true,
+      message: status === "active" ? "User account activated" : "User account inactivated",
+      data: result,
+    });
+  } catch (error) {
+    console.error("[ADMIN] update account status error:", error);
+    return res.status(error.status || 500).json({
+      success: false,
+      message: error.message || "Failed to update account status",
+      errorCode: error.code || "ACCOUNT_STATUS_FAILED",
+    });
+  }
+}
+
+/** Permanently delete a registered user from the database (CASCADE dependents). */
+async function deleteUserAccount(req, res) {
+  try {
+    const userId = Number(req.params.id);
+    if (!userId) {
+      return res.status(400).json({ success: false, message: "Valid user id is required" });
+    }
+
+    const { hardDeleteUser } = require("../services/accountStatusService");
+    const result = await hardDeleteUser({
+      userId,
+      actorUserId: req.user.id,
+      ipAddress: req.ip,
+      userAgent: req.headers["user-agent"],
+    });
+
+    return res.json({
+      success: true,
+      message: "User deleted permanently from the database",
+      data: result,
+    });
+  } catch (error) {
+    console.error("[ADMIN] delete user error:", error);
+    return res.status(error.status || 500).json({
+      success: false,
+      message: error.message || "Failed to delete user",
+      errorCode: error.code || "DELETE_USER_FAILED",
+    });
   }
 }
 
@@ -1314,6 +1400,8 @@ module.exports = {
   upsertUserKyc,
   upsertUserNominee,
   updateUserKycStatus,
+  updateUserAccountStatus,
+  deleteUserAccount,
   listWithdrawals,
   processWithdrawal,
   getUserBankAccountAdmin,
