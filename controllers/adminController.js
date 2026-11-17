@@ -86,7 +86,7 @@ function mapNominee(row) {
   };
 }
 
-function mapKyc(row) {
+function mapKyc(row, digilockerRow = null) {
   if (!row) {
     return {
       submitted: false,
@@ -105,6 +105,17 @@ function mapKyc(row) {
     digilocker_ref: row.digilocker_ref,
     created_at: row.created_at,
     updated_at: row.updated_at,
+    auth_status: digilockerRow?.auth_status || null,
+    aadhaar_status: digilockerRow?.aadhaar_status || null,
+    pan_status: digilockerRow?.pan_status || null,
+    name_status: digilockerRow?.name_status || null,
+    dob_status: digilockerRow?.dob_status || null,
+    address_status: digilockerRow?.address_status || null,
+    overall_status: digilockerRow?.overall_status || null,
+    review_reason: digilockerRow?.review_reason || null,
+    consent_at: digilockerRow?.consent_at || null,
+    verified_at: digilockerRow?.verified_at || null,
+    consent_ref: digilockerRow?.consent_ref || null,
   };
 }
 
@@ -242,6 +253,9 @@ async function listUsers(req, res) {
          k.pan_number, k.pan_full_name, k.pan_image,
          k.aadhaar_number, k.aadhaar_image, k.digilocker_ref,
          k.created_at AS kyc_submitted_at,
+         d.auth_status, d.aadhaar_status, d.pan_status, d.name_status, d.dob_status,
+         d.address_status, d.overall_status, d.review_reason, d.aadhaar_last4, d.pan_masked,
+         d.consent_at, d.verified_at, d.consent_ref, d.status AS digilocker_record_status,
          n.nominee_name, n.relationship, n.date_of_birth AS nominee_dob,
          n.mobile AS nominee_mobile, n.email AS nominee_email, n.address AS nominee_address,
          n.pan_number AS nominee_pan, n.aadhaar_number AS nominee_aadhaar,
@@ -250,60 +264,84 @@ async function listUsers(req, res) {
          n.status AS nominee_status
        FROM users u
        LEFT JOIN kyc_documents k ON k.user_id = u.id
+       LEFT JOIN digilocker_kyc_records d ON d.user_id = u.id
        LEFT JOIN nominees n ON n.user_id = u.id
        ${where}
        ORDER BY u.created_at DESC`,
       params
     );
 
-    const usersBase = rows.map((row) => ({
-      id: row.id,
-      full_name: row.full_name,
-      email: row.email,
-      phone: row.phone,
-      profile_image: row.profile_image,
-      role: row.role,
-      kyc_status: row.kyc_status,
-      kyc_method: row.kyc_method,
-      created_at: row.created_at,
-      updated_at: row.updated_at,
-      kyc: mapKyc(
-        row.pan_number
-          ? {
-              method: row.kyc_doc_method,
-              status: row.kyc_doc_status,
-              pan_number: row.pan_number,
-              pan_full_name: row.pan_full_name,
-              pan_image: row.pan_image,
-              aadhaar_number: row.aadhaar_number,
-              aadhaar_image: row.aadhaar_image,
-              digilocker_ref: row.digilocker_ref,
-              created_at: row.kyc_submitted_at,
-            }
-          : null
-      ),
-      nominee: mapNominee(
-        row.nominee_name
-          ? {
-              nominee_name: row.nominee_name,
-              relationship: row.relationship,
-              date_of_birth: row.nominee_dob,
-              mobile: row.nominee_mobile,
-              email: row.nominee_email,
-              address: row.nominee_address,
-              pan_number: row.nominee_pan,
-              aadhaar_number: row.nominee_aadhaar,
-              pan_image: row.nominee_pan_image,
-              aadhaar_image: row.nominee_aadhaar_image,
-              allocation_percent: row.allocation_percent,
-              is_minor: row.is_minor,
-              guardian_name: row.guardian_name,
-              guardian_relationship: row.guardian_relationship,
-              status: row.nominee_status,
-            }
-          : null
-      ),
-    }));
+    const usersBase = rows.map((row) => {
+      const digilockerRow = row.overall_status || row.consent_ref || row.digilocker_record_status
+        ? {
+            auth_status: row.auth_status,
+            aadhaar_status: row.aadhaar_status,
+            pan_status: row.pan_status,
+            name_status: row.name_status,
+            dob_status: row.dob_status,
+            address_status: row.address_status,
+            overall_status: row.overall_status,
+            review_reason: row.review_reason,
+            aadhaar_last4: row.aadhaar_last4,
+            pan_masked: row.pan_masked,
+            consent_at: row.consent_at,
+            verified_at: row.verified_at,
+            consent_ref: row.consent_ref,
+            status: row.digilocker_record_status,
+          }
+        : null;
+
+      return {
+        id: row.id,
+        full_name: row.full_name,
+        email: row.email,
+        phone: row.phone,
+        profile_image: row.profile_image,
+        role: row.role,
+        kyc_status: row.kyc_status,
+        kyc_method: row.kyc_method,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+        digilocker: digilockerRow,
+        kyc: mapKyc(
+          row.kyc_doc_method || row.pan_number || row.digilocker_ref
+            ? {
+                method: row.kyc_doc_method,
+                status: row.kyc_doc_status,
+                pan_number: row.pan_number,
+                pan_full_name: row.pan_full_name,
+                pan_image: row.pan_image,
+                aadhaar_number: row.aadhaar_number,
+                aadhaar_image: row.aadhaar_image,
+                digilocker_ref: row.digilocker_ref || row.consent_ref,
+                created_at: row.kyc_submitted_at || row.consent_at,
+              }
+            : null,
+          digilockerRow
+        ),
+        nominee: mapNominee(
+          row.nominee_name
+            ? {
+                nominee_name: row.nominee_name,
+                relationship: row.relationship,
+                date_of_birth: row.nominee_dob,
+                mobile: row.nominee_mobile,
+                email: row.nominee_email,
+                address: row.nominee_address,
+                pan_number: row.nominee_pan,
+                aadhaar_number: row.nominee_aadhaar,
+                pan_image: row.nominee_pan_image,
+                aadhaar_image: row.nominee_aadhaar_image,
+                allocation_percent: row.allocation_percent,
+                is_minor: row.is_minor,
+                guardian_name: row.guardian_name,
+                guardian_relationship: row.guardian_relationship,
+                status: row.nominee_status,
+              }
+            : null
+        ),
+      };
+    });
 
     const scoreMap = await getLatestScoresMapForUsers(usersBase.map((u) => u.id));
     const users = usersBase.map((u) => ({
@@ -363,6 +401,19 @@ async function getUserById(req, res) {
       { userId }
     );
 
+    let digilockerRow = null;
+    try {
+      const [dlRows] = await pool.query(
+        `SELECT auth_status, aadhaar_status, pan_status, name_status, dob_status, address_status,
+                overall_status, review_reason, aadhaar_last4, pan_masked, status
+         FROM digilocker_kyc_records WHERE user_id = :userId LIMIT 1`,
+        { userId }
+      );
+      digilockerRow = dlRows[0] || null;
+    } catch (_e) {
+      digilockerRow = null;
+    }
+
     const [nomineeRows] = await pool.query(
       `SELECT nominee_name, relationship, date_of_birth, mobile, email, address,
               pan_number, aadhaar_number, pan_image, aadhaar_image, allocation_percent,
@@ -381,7 +432,22 @@ async function getUserById(req, res) {
           ...user,
           email_verified: Boolean(user.email_verified_at),
         },
-        kyc: mapKyc(kycRows[0] || null),
+        kyc: mapKyc(kycRows[0] || null, digilockerRow),
+        digilocker: digilockerRow
+          ? {
+              auth_status: digilockerRow.auth_status,
+              aadhaar_status: digilockerRow.aadhaar_status,
+              pan_status: digilockerRow.pan_status,
+              name_status: digilockerRow.name_status,
+              dob_status: digilockerRow.dob_status,
+              address_status: digilockerRow.address_status,
+              overall_status: digilockerRow.overall_status,
+              review_reason: digilockerRow.review_reason,
+              aadhaar_last4: digilockerRow.aadhaar_last4,
+              pan_masked: digilockerRow.pan_masked,
+              status: digilockerRow.status,
+            }
+          : null,
         nominee: mapNominee(nomineeRows[0] || null),
         credit_score: {
           primary_score: creditScores.primary_score,

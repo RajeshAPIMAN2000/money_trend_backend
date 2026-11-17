@@ -100,6 +100,97 @@ async function ensureCoreTables() {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS digilocker_oauth_sessions (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      user_id INT UNSIGNED NOT NULL,
+      state VARCHAR(128) NOT NULL,
+      code_verifier VARCHAR(512) NOT NULL,
+      nonce VARCHAR(128) NULL,
+      status ENUM('pending','consumed','completed','expired','failed') NOT NULL DEFAULT 'pending',
+      redirect_uri VARCHAR(500) NOT NULL,
+      scope VARCHAR(255) NULL,
+      digilocker_id VARCHAR(64) NULL,
+      result_meta_json JSON NULL,
+      ip_address VARCHAR(64) NULL,
+      user_agent VARCHAR(500) NULL,
+      expires_at DATETIME NOT NULL,
+      consumed_at DATETIME NULL,
+      completed_at DATETIME NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_digilocker_state (state),
+      KEY idx_digilocker_user_status (user_id, status),
+      KEY idx_digilocker_expires (expires_at),
+      CONSTRAINT fk_digilocker_session_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS digilocker_kyc_records (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      user_id INT UNSIGNED NOT NULL,
+      session_id BIGINT UNSIGNED NULL,
+      digilocker_id VARCHAR(64) NULL,
+      full_name_enc VARCHAR(512) NULL,
+      dob_enc VARCHAR(512) NULL,
+      gender VARCHAR(8) NULL,
+      aadhaar_last4 CHAR(4) NULL,
+      pan_masked VARCHAR(20) NULL,
+      eaadhaar_available TINYINT(1) NOT NULL DEFAULT 0,
+      issued_docs_json JSON NULL,
+      consent_meta_json JSON NULL,
+      auth_status VARCHAR(32) NULL,
+      aadhaar_status VARCHAR(32) NULL,
+      pan_status VARCHAR(32) NULL,
+      name_status VARCHAR(32) NULL,
+      dob_status VARCHAR(32) NULL,
+      address_status VARCHAR(32) NULL,
+      overall_status VARCHAR(32) NULL,
+      review_reason VARCHAR(500) NULL,
+      verification_json JSON NULL,
+      status ENUM('submitted','verified','rejected') NOT NULL DEFAULT 'submitted',
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_digilocker_kyc_user (user_id),
+      KEY idx_digilocker_kyc_session (session_id),
+      CONSTRAINT fk_digilocker_kyc_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  // Evolve existing DigiLocker KYC tables (safe for already-deployed DBs)
+  await addColumnIfMissing(pool, "digilocker_kyc_records", "auth_status", "auth_status VARCHAR(32) NULL");
+  await addColumnIfMissing(pool, "digilocker_kyc_records", "aadhaar_status", "aadhaar_status VARCHAR(32) NULL");
+  await addColumnIfMissing(pool, "digilocker_kyc_records", "pan_status", "pan_status VARCHAR(32) NULL");
+  await addColumnIfMissing(pool, "digilocker_kyc_records", "name_status", "name_status VARCHAR(32) NULL");
+  await addColumnIfMissing(pool, "digilocker_kyc_records", "dob_status", "dob_status VARCHAR(32) NULL");
+  await addColumnIfMissing(pool, "digilocker_kyc_records", "address_status", "address_status VARCHAR(32) NULL");
+  await addColumnIfMissing(pool, "digilocker_kyc_records", "overall_status", "overall_status VARCHAR(32) NULL");
+  await addColumnIfMissing(pool, "digilocker_kyc_records", "review_reason", "review_reason VARCHAR(500) NULL");
+  await addColumnIfMissing(pool, "digilocker_kyc_records", "verification_json", "verification_json JSON NULL");
+  await addColumnIfMissing(pool, "digilocker_kyc_records", "address_enc", "address_enc VARCHAR(1024) NULL");
+  await addColumnIfMissing(pool, "digilocker_kyc_records", "authenticity_json", "authenticity_json JSON NULL");
+  await addColumnIfMissing(pool, "digilocker_kyc_records", "consent_at", "consent_at DATETIME NULL");
+  await addColumnIfMissing(pool, "digilocker_kyc_records", "verified_at", "verified_at DATETIME NULL");
+  await addColumnIfMissing(pool, "digilocker_kyc_records", "consent_ref", "consent_ref VARCHAR(191) NULL");
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS digilocker_kyc_audit_logs (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      user_id INT UNSIGNED NOT NULL,
+      session_id BIGINT UNSIGNED NULL,
+      action VARCHAR(64) NOT NULL,
+      detail_json JSON NULL,
+      actor VARCHAR(64) NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_digilocker_audit_user (user_id),
+      CONSTRAINT fk_digilocker_audit_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS nominees (
       id INT UNSIGNED NOT NULL AUTO_INCREMENT,
       user_id INT UNSIGNED NOT NULL,

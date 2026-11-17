@@ -35,6 +35,9 @@ const goalsRoutes = require("./routes/goals");
 const testimonialsRoutes = require("./routes/testimonials");
 const visitorsRoutes = require("./routes/visitors");
 const notificationsRoutes = require("./routes/notifications");
+const digilockerRoutes = require("./routes/digilocker");
+const { digilockerCallback } = require("./controllers/digilockerController");
+const { digilockerRateLimit } = require("./middleware/digilockerRateLimit");
 const { serveSitemap, serveRobots } = require("./controllers/seoController");
 const {
   listBlogs,
@@ -42,6 +45,19 @@ const {
   listNews,
   getNewsById,
 } = require("./controllers/articleController");
+
+/** DigiLocker OAuth redirect — must always hit Node (partner URI: /api/digilocker/callback). */
+const DIGILOCKER_CALLBACK_PATHS = [
+  "/api/digilocker/callback",
+  "/digilocker/callback",
+  "/api/kyc/digilocker/callback",
+  "/kyc/digilocker/callback",
+];
+
+function isDigilockerCallbackPath(pathname) {
+  const clean = String(pathname || "").split("?")[0].replace(/\/+$/, "") || "/";
+  return /(?:^|\/)(?:api\/)?(?:kyc\/)?digilocker\/callback$/i.test(clean);
+}
 
 const app = express();
 
@@ -95,6 +111,7 @@ function mountApiRoutes(basePath = "") {
   app.use(route("/testimonials"), testimonialsRoutes);
   app.use(route("/visitors"), visitorsRoutes);
   app.use(route("/notifications"), notificationsRoutes);
+  app.use(route("/digilocker"), digilockerRoutes);
   app.get(route("/health"), (_req, res) => {
     res.json(healthPayload());
   });
@@ -208,6 +225,8 @@ app.get(["/api", "/api/"], (_req, res) => {
       "/api/testimonials",
       "/api/visitors",
       "/api/banners",
+      "/api/digilocker",
+      "/api/digilocker/callback",
     ],
     docs: "/api-docs",
   });
@@ -227,6 +246,17 @@ app.get("/api/robots.txt", serveRobots);
 mountApiRoutes("/api");
 // cPanel/LiteSpeed often forwards /api/* with the prefix stripped.
 mountApiRoutes("");
+
+// Explicit DigiLocker callback aliases (partner redirect URI must never 404 as JSON).
+app.get(DIGILOCKER_CALLBACK_PATHS, digilockerRateLimit, digilockerCallback);
+
+app.use((req, res, next) => {
+  // Last-chance match for odd proxy rewrites that still contain digilocker/callback.
+  if (req.method === "GET" && isDigilockerCallbackPath(req.originalUrl || req.path)) {
+    return digilockerRateLimit(req, res, () => digilockerCallback(req, res));
+  }
+  return next();
+});
 
 app.use((req, res) => {
   const path = String(req.originalUrl || "");
